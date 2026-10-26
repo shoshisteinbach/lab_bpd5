@@ -1,0 +1,4 @@
+"status","Freq","percent"
+"Kept",60799,98.07
+"Removed: |robust z| > 5",65,0.1
+"Removed: outside 10-120 mm",1133,1.83
