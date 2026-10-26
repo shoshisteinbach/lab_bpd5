@@ -11,7 +11,7 @@
 #    5. הסרת מדידות חסרות וניקוי חריגים (שיטת שבוע 1)
 #    6. עקומות הייחוס
 #    7. ציון z ואחוזון לכל מדידה
-#    8. הבדיקה הסטטיסטית: בדיקה אחת לכל הריון + מבחן בינומי לכל סף
+#    8. הבדיקה הסטטיסטית: בדיקה אחת לכל הריון + מבחן z להסתברות לכל סף
 #
 #  R בסיסי בלבד - אין חבילות להתקין.
 #  הטבלאות נשמרות כ-CSV והגרפים כ-PNG בתיקייה "bpd_output".
@@ -271,8 +271,13 @@ section("8. Test for each method and threshold")
 # השאלה: אם העקומה מתאימה, אחוז המדידות החריגות בכל סף שווה לאחוז הנקוב.
 #   H0: P(מדידה מסווגת כחריגה) = השיעור הנקוב   H1: השיעור שונה
 #
-# בדיקות של אותו הריון אינן בלתי תלויות, ולכן המבחן הבינומי נעשה על
+# בדיקות של אותו הריון אינן בלתי תלויות, ולכן המבחן נעשה על
 # בדיקה אחת שנבחרה אקראית מכל הריון.
+#
+# המבחן: מבחן z להסתברות (פרופורציה) בשני צדדים, לכל סף בנפרד:
+#   p_hat = חלק המדידות שחרגו מהסף,  p0 = השיעור הנקוב
+#   z = (p_hat - p0) / sqrt(p0 * (1 - p0) / n)     ו-  p-value = 2 * P(Z > |z|)
+#   רווח סמך 95% להסתברות: p_hat +- 1.96 * sqrt(p_hat * (1 - p_hat) / n)
 one_per_preg <- function(df) {
   idx <- split(seq_len(nrow(df)), df$preg_id)
   unname(vapply(idx, function(i) if (length(i) == 1) i else sample(i, 1), integer(1)))
@@ -287,16 +292,20 @@ for (m in names(methods)) {
   u <- d1[[paste0("u_", methods[m])]]
   for (i in seq_len(nrow(thr))) {
     flagged <- if (thr$side[i] == "low") u < thr$cut[i] else u > thr$cut[i]
-    x  <- sum(flagged)
-    bt <- binom.test(x, n, thr$nominal[i])       # מבחן בינומי מדויק, עם רווח סמך 95%
+    x     <- sum(flagged)
+    p0    <- thr$nominal[i]                                  # ההסתברות לפי H0
+    p_hat <- x / n                                           # ההסתברות שנמדדה
+    z_stat <- (p_hat - p0) / sqrt(p0 * (1 - p0) / n)         # סטטיסטי המבחן
+    se_hat <- sqrt(p_hat * (1 - p_hat) / n)                  # שגיאה תקנית לרווח הסמך
     rows[[length(rows) + 1]] <- data.frame(
       method = m, threshold = thr$label[i],
-      nominal_pct = pct(thr$nominal[i]), n_flagged = x, n = n,
-      observed_pct = pct(x / n),
-      ci95_low = pct(bt$conf.int[1]), ci95_high = pct(bt$conf.int[2]),
-      ratio_obs_to_nominal = round((x / n) / thr$nominal[i], 2),
-      excess_per_1000_scans = round(1000 * (x / n - thr$nominal[i]), 1),
-      p_value = signif(bt$p.value, 3))
+      nominal_pct = pct(p0), n_flagged = x, n = n,
+      observed_pct = pct(p_hat),
+      ci95_low = pct(p_hat - 1.96 * se_hat), ci95_high = pct(p_hat + 1.96 * se_hat),
+      ratio_obs_to_nominal = round(p_hat / p0, 2),
+      excess_per_1000_scans = round(1000 * (p_hat - p0), 1),
+      z = round(z_stat, 1),
+      p_value = signif(2 * pnorm(-abs(z_stat)), 3))
   }
 }
 res <- do.call(rbind, rows)
