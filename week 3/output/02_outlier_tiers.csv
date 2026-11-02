@@ -1,0 +1,6 @@
+"tier","n","pct_of_scans"
+"looks like outlier (|z|>3)",841,1.47
+"  of them consistent with head circumference",757,1.32
+"  of them inconsistent",84,0.15
+"    extreme (|z|>5) and inconsistent = REMOVED",53,0.09
+"  extreme (|z|>5) but consistent = kept",12,0.02

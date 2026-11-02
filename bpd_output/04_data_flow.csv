@@ -1,0 +1,5 @@
+"step","scans"
+"Raw file",61999
+"After restricting to week 40",57354
+"After removing missing BPD",57352
+"Final (after cleaning)",57287

@@ -1,0 +1,4 @@
+"rule","n","pct"
+"Rule 1: BPD outside 10-120 mm",0,0
+"Rule 2: |robust z| > 5 within week",65,0.113
+"Removed by at least one rule",65,0.113
