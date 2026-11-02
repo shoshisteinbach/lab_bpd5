@@ -197,11 +197,83 @@ save_plot("02_outliers_scatter", function() {
 # (check_d_sas), לבדוק עד כמה הערכים שונים זה מזה, ולקבוע איזו מדידה נשארת.
 # במצגת: כמה מקרים כאלה היו ואיזה כלל עבדנו לפיו.
 #
-# התוצאה: העמודה dat$near_dup (TRUE = המדידה להסרה). בינתיים אף מדידה לא מסומנת.
+# התוצאה: העמודה dat$near_dup (TRUE = המדידה להסרה).
+#
+# הכלל (פירוט הנימוקים ב-week 3/README.md):
+#   סמוך = עד NEAR_DAYS ימים מהמדידה הראשונה בקבוצה, באותו הריון. הקבוצה נמדדת
+#   מהמדידה הראשונה ולא בשרשרת, כדי שמדידות בימים 0, 3, 6, 9 לא יהפכו לקבוצה אחת.
+#   נשארת המדידה הראשונה. אם בתאריך הראשון יש כמה מדידות (אין שעה), נשארת זו
+#   שהיחס head_cir/bpd שלה הכי קרוב לחציון של השבוע.
+#   הבדיקה רצה רק על מדידות שלא הוסרו כחריגים בסעיף 2.
+
+NEAR_DAYS <- 3     # ה-BPD גדל בכ-0.3 מ"מ ביום, כלומר פחות ממחצית רעש המדידה (כ-2.4 מ"מ)
 
 dat$near_dup <- FALSE
+idx <- which(!dat$outlier)
+idx <- idx[order(dat$preg_id[idx], dat$check_d_sas[idx], abs(dat$ratio_rz[idx]))]
 
-# TODO: הגדרת "סמוך", השוואת הערכים וכלל ההחלטה
+near_group <- integer(length(idx))     # מספר קבוצה לכל מדידה (לפי הסדר ב-idx)
+g <- 0; anchor_day <- -Inf; anchor_preg <- -1
+for (i in seq_along(idx)) {
+  r <- idx[i]
+  if (dat$preg_id[r] != anchor_preg || dat$check_d_sas[r] - anchor_day > NEAR_DAYS) {
+    g <- g + 1; anchor_day <- dat$check_d_sas[r]; anchor_preg <- dat$preg_id[r]
+  }
+  near_group[i] <- g
+}
+# בכל קבוצה הראשונה ב-idx נשארת (תאריך מוקדם, ובאותו יום: היחס העקבי ביותר)
+dat$near_dup[idx] <- duplicated(near_group)
+
+# הפער בין מדידות עוקבות של אותו הריון, ועד כמה ה-BPD שונה
+o    <- idx[order(dat$preg_id[idx], dat$check_d_sas[idx])]
+same <- c(FALSE, diff(dat$preg_id[o]) == 0)
+gap  <- ifelse(same, c(NA, diff(dat$check_d_sas[o])), NA)
+dbpd <- ifelse(same, c(NA, diff(dat$bpd[o])), NA)
+
+gap_tbl <- data.frame(gap_days = 0:NEAR_DAYS)
+gap_tbl$pairs        <- sapply(gap_tbl$gap_days, function(x) sum(gap == x, na.rm = TRUE))
+gap_tbl$median_abs_d <- sapply(gap_tbl$gap_days, function(x) median(abs(dbpd[which(gap == x)])))
+gap_tbl$p90_abs_d    <- sapply(gap_tbl$gap_days, function(x) quantile(abs(dbpd[which(gap == x)]), 0.9))
+gap_tbl$pct_identical <- sapply(gap_tbl$gap_days, function(x) round(100 * mean(dbpd[which(gap == x)] == 0), 1))
+print(gap_tbl, row.names = FALSE)
+save_table(gap_tbl, "03_near_by_gap")
+
+grp_size <- table(near_group)
+near_tbl <- data.frame(
+  what = c("groups of adjacent scans", "pregnancies involved", "scans removed",
+           "same-day scans fully identical (all measures)"),
+  n    = c(sum(grp_size > 1),
+           length(unique(dat$preg_id[dat$near_dup])),
+           sum(dat$near_dup),
+           sum(duplicated(dat[idx, c("preg_id", "check_d_sas", "bpd", "hc_mm", "femur")]))))
+print(near_tbl, row.names = FALSE)
+save_table(near_tbl, "03_near_summary")
+
+# גרף 1: כמה ימים עוברים בין מדידות עוקבות של אותו הריון (0-28)
+save_plot("03_near_gap_days", function() {
+  cnt <- sapply(0:28, function(x) sum(gap == x, na.rm = TRUE))
+  mid <- barplot(cnt, col = ifelse(0:28 <= NEAR_DAYS, COL_REMOVE, COL_BULK), border = NA, las = 1,
+                 xlab = heb("ימים בין שתי מדידות עוקבות של אותו הריון"),
+                 ylab = heb("מספר זוגות מדידות"),
+                 main = heb("הפער בימים בין מדידות עוקבות של אותו הריון"))
+  axis(1, at = mid, labels = 0:28, cex.axis = 0.8)
+  legend("topleft", bty = "n", pch = 15, pt.cex = 1.5, col = c(COL_REMOVE, COL_BULK),
+         legend = heb(c(paste0("סמוכות: עד ", NEAR_DAYS, " ימים - נשארת רק הראשונה"),
+                        "מדידות נפרדות")))
+})
+
+# גרף 2: עד כמה ה-BPD שונה בין שתי מדידות סמוכות
+save_plot("03_near_bpd_pairs", function() {
+  k <- which(gap <= NEAR_DAYS)
+  b1 <- dat$bpd[o][k - 1]; b2 <- dat$bpd[o][k]
+  plot(b1, b2, pch = 16, cex = 0.7, col = alpha_col(COL_KEEP, 0.6), las = 1,
+       xlab = heb("BPD במדידה הראשונה (מ\"מ)"),
+       ylab = heb("BPD במדידה הסמוכה (מ\"מ)"),
+       main = heb(paste0("מדידות סמוכות (עד ", NEAR_DAYS, " ימים): BPD במדידה הראשונה מול הסמוכה")))
+  abline(0, 1, col = COL_REMOVE, lwd = 1.5)
+  legend("topleft", bty = "n", lty = 1, col = COL_REMOVE, lwd = 1.5,
+         legend = heb(c("קו שוויון: אותו ערך בשתי המדידות")))
+})
 
 ## ======================== 4. הטיית דגימה (חלק ג) ============================
 # מטרה: לבדוק אם נשים חזרו לבדיקות מאוחרות בעקבות ממצא חריג מוקדם
