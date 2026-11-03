@@ -499,8 +499,21 @@ save_plot("04_sampling_bias_return_rates", function() {
 #
 # הסעיף לא משנה את dat; הוא רק מפיק תוצאות.
 
-cmp <- dat[!dat$outlier & !dat$near_dup & (dat$year %in% TRAIN_YEARS | dat$year >= TEST_FROM), ]
-cmp$set <- factor(ifelse(cmp$year %in% TRAIN_YEARS, "train", "test"), levels = c("train", "test"))
+# החלוקה לאימון ובדיקה היא לפי הריון ולא לפי מדידה: כל הריון עובר בשלמותו לקובץ
+# של השנה של המדידה הראשונה שלו (מבין המדידות שנשארו). אחרת 469 הריונות שעוברים
+# מסוף 2007 ל-2008 היו מפוצלים בין הקבצים, וקובץ הבדיקה לא היה בלתי תלוי באימון.
+# אותה חלוקה משמשת גם בסעיף 6.
+keep <- !dat$outlier & !dat$near_dup
+first_day <- ave(ifelse(keep, dat$check_d_sas, Inf), dat$preg_id, FUN = min)
+dat$split_year <- ave(ifelse(keep & dat$check_d_sas == first_day, dat$year, Inf), dat$preg_id, FUN = min)
+dat$set <- ifelse(dat$split_year %in% TRAIN_YEARS, "train",
+                  ifelse(dat$split_year >= TEST_FROM & is.finite(dat$split_year), "test", NA))
+cat("Scans moved by whole-pregnancy split:",
+    sum(keep & dat$set == "train" & dat$year >= TEST_FROM), "into train |",
+    sum(keep & dat$set == "test" & dat$year %in% TRAIN_YEARS), "into test\n")
+
+cmp <- dat[keep & !is.na(dat$set), ]
+cmp$set <- factor(cmp$set, levels = c("train", "test"))
 is_tr <- cmp$set == "train"
 
 # 5.1 ערכי ייחוס מהאימון בלבד, בכל שבוע
@@ -582,12 +595,34 @@ save_plot("05_train_test_density", function() {
 
 ## ======================== 6. הקבצים הסופיים ================================
 # הסרת הסימונים מסעיפים 2-3 וחלוקה לפי שנה.
-# להחליט כצוות: האם גם קובץ הבדיקה עובר ניקוי חריגים ומדידות סמוכות
-# (כרגע כן, אותו ניקוי לשני הקבצים).
+# החלטות (פירוט ב-week 3/README.md, סעיף 9):
+#   - שני הקבצים עוברים אותו ניקוי (חריגים ומדידות סמוכות): טעויות הקלדה היו
+#     מעוותות את הערכת העקומה על קובץ הבדיקה, וסעיף 5 הראה שהקבצים דומים.
+#   - עמודות העבודה מוסרות: bpd_rz ו-ratio_rz (חושבו על כל קובץ הבסיס ואין להן
+#     משמעות בהמשך), outlier ו-near_dup (תמיד FALSE אחרי ההסרה). hc_mm נשאר.
+
+#   - כל הריון עובר בשלמותו לקובץ של השנה של המדידה הראשונה שלו (העמודה set,
+#     שנבנית בסעיף 5), כדי שאף הריון לא יופיע בשני הקבצים.
+
+DROP_COLS <- c("bpd_rz", "ratio_rz", "outlier", "near_dup", "split_year", "set")
 
 clean <- dat[!dat$outlier & !dat$near_dup, ]
-train <- clean[clean$year %in% TRAIN_YEARS, ]
-test  <- clean[clean$year >= TEST_FROM, ]
+clean <- clean[order(clean$preg_id, clean$check_d_sas), ]
+train <- clean[clean$set %in% "train", setdiff(names(clean), DROP_COLS)]
+test  <- clean[clean$set %in% "test",  setdiff(names(clean), DROP_COLS)]
+
+final_tbl <- data.frame(
+  file         = c("train.csv", "test.csv"),
+  years        = c(paste(range(train$year), collapse = "-"), paste(range(test$year), collapse = "-")),
+  scans        = c(nrow(train), nrow(test)),
+  pregnancies  = c(length(unique(train$preg_id)), length(unique(test$preg_id))),
+  women        = c(length(unique(train$snumber)), length(unique(test$snumber))),
+  weeks        = c(paste(range(train$week), collapse = "-"), paste(range(test$week), collapse = "-")),
+  columns      = ncol(train))
+print(final_tbl, row.names = FALSE)
+cat("Pregnancies split between train and test:",
+    length(intersect(train$preg_id, test$preg_id)), "\n")
+save_table(final_tbl, "06_final_files")
 
 write.csv(train, file.path("week 3", "train.csv"), row.names = FALSE)
 write.csv(test,  file.path("week 3", "test.csv"),  row.names = FALSE)
@@ -595,4 +630,4 @@ write.csv(test,  file.path("week 3", "test.csv"),  row.names = FALSE)
 cat("Removed: ", sum(dat$outlier), " outliers, ", sum(dat$near_dup),
     " near-duplicate scans\n", sep = "")
 cat("Train:", nrow(train), "scans | Test:", nrow(test), "scans |",
-    "years outside both:", sum(!(clean$year %in% TRAIN_YEARS) & clean$year < TEST_FROM), "scans\n")
+    "in neither file:", sum(is.na(clean$set)), "scans\n")
