@@ -314,14 +314,162 @@ save_plot("03_near_bpd_pairs", function() {
 })
 
 ## ======================== 4. הטיית דגימה (חלק ג) ============================
-# מטרה: לבדוק אם נשים חזרו לבדיקות מאוחרות בעקבות ממצא חריג מוקדם
-# (הטיית דגימה בשבועות המאוחרים), על המדד BPD. שיטה שונה מזו שבכיתה.
-# מומלץ להריץ אחרי סעיפים 2-3, על הנתונים אחרי ההסרות:
-#   clean <- dat[!dat$outlier & !dat$near_dup, ]
+# שאלת המחקר:
+# האם הסיכוי למדידת BPD נוספת בתוך ארבעה שבועות שונה בין הריונות
+# שבהם מדידת הבסיס נמוכה, מרכזית או גבוהה ביחס להתפלגות BPD באותו שבוע?
 #
-# הסעיף לא משנה את dat; הוא רק מפיק תוצאות.
+# שיטה:
+#   1. עובדים על נתונים נקיים: מסירים outlier ו-near_dup.
+#   2. יחידת הניתוח היא הריון (preg_id), לא מדידה.
+#   3. לכל הריון בוחרים את המדידה הראשונה בשבועות 20-24.
+#   4. בתוך כל שבוע בסיס מחשבים P10 ו-P90 של BPD במדידות הבסיס.
+#   5. מחלקים לשלוש קבוצות: נמוך (<P10), מרכזי (P10 עד P90),
+#      גבוה (>P90).
+#   6. בודקים אם קיימת מדידה נוספת באותו הריון במהלך 28 הימים
+#      שלאחר מדידת הבסיס.
+#   7. משווים את שיעור החזרה בין שלוש הקבוצות בטבלת 3x2 ובמבחן
+#      Chi-square. אם התדירויות הצפויות קטנות, משתמשים ב-Fisher.
+#
+# חשוב:
+#   - מוציאים הריונות שאין להם חלון מעקב מלא של 28 ימים עד סוף הנתונים.
+#   - מוציאים גם הריון שבו תאריך הלידה המשוער (expected) חל בתוך חלון
+#     המעקב או לפניו. זהו סינון שמרני לפי תאריך משוער, לא תאריך לידה בפועל.
+#   - "לא חזר" פירושו שלא נמצאה מדידה נוספת בקובץ בתוך 28 יום;
+#     אין בכך הוכחה שלא נעשתה בדיקה מחוץ למאגר.
+#   - הבדיקה מזהה קשר אפשרי למנגנון מעקב/בחירה, ולא מוכיחה סיבתיות.
+#   - יש לוודא שהשיטה שונה מהשיטה שנלמדה בכיתה, כנדרש במטלה.
+#
+# התוצאות נשמרות ב-week 3/output. הסעיף אינו משנה את dat.
 
-# TODO: השאלה, השיטה, התוצאה וגרף
+clean <- dat[!dat$outlier & !dat$near_dup, ]
+
+# 4.1 מדידת בסיס: המדידה הראשונה בשבועות 20-24 בכל הריון
+baseline_pool <- clean[clean$pregweek >= 20 & clean$pregweek < 25, ]
+baseline_pool <- baseline_pool[
+  order(baseline_pool$preg_id, baseline_pool$check_d_sas), ]
+
+first_idx <- !duplicated(baseline_pool$preg_id)
+baseline <- baseline_pool[first_idx, ]
+
+# 4.2 חלון מעקב מלא: 28 ימים עד סוף תקופת הנתונים
+FOLLOWUP_DAYS <- 28
+last_data_day <- max(dat$check_d_sas, na.rm = TRUE)
+
+has_full_calendar_window <- baseline$check_d_sas + FOLLOWUP_DAYS <= last_data_day
+
+# סינון שמרני נוסף: תאריך הלידה המשוער צריך להיות אחרי סוף חלון המעקב.
+# אם expected חסר, לא ניתן לוודא את התנאי ולכן מוציאים את ההריון.
+has_full_pregnancy_window <- !is.na(baseline$expected) &
+  baseline$expected > baseline$check_d_sas + FOLLOWUP_DAYS
+
+eligible <- baseline[has_full_calendar_window & has_full_pregnancy_window, ]
+
+cat("Sampling-bias baseline:", nrow(baseline), "pregnancies |",
+    "excluded: incomplete calendar window",
+    sum(!has_full_calendar_window), "|",
+    "excluded: expected delivery within follow-up window",
+    sum(has_full_calendar_window & !has_full_pregnancy_window), "|",
+    "eligible:", nrow(eligible), "\n")
+
+# 4.3 ספי P10 ו-P90 בתוך שבוע הבסיס (על מדידות הבסיס בלבד)
+week_cutoffs <- do.call(rbind, lapply(sort(unique(eligible$week)), function(w) {
+  x <- eligible$bpd[eligible$week == w]
+  data.frame(
+    week = w,
+    n_baseline = length(x),
+    p10 = as.numeric(quantile(x, 0.10, na.rm = TRUE, names = FALSE)),
+    p90 = as.numeric(quantile(x, 0.90, na.rm = TRUE, names = FALSE))
+  )
+}))
+
+eligible$p10 <- week_cutoffs$p10[match(eligible$week, week_cutoffs$week)]
+eligible$p90 <- week_cutoffs$p90[match(eligible$week, week_cutoffs$week)]
+
+eligible$bpd_group <- ifelse(
+  eligible$bpd < eligible$p10, "Low (<P10)",
+  ifelse(eligible$bpd > eligible$p90, "High (>P90)", "Middle (P10-P90)")
+)
+eligible$bpd_group <- factor(
+  eligible$bpd_group,
+  levels = c("Low (<P10)", "Middle (P10-P90)", "High (>P90)")
+)
+
+# 4.4 האם קיימת מדידה נוספת בתוך 28 יום אחרי מדידת הבסיס?
+followup_by_preg <- split(clean, clean$preg_id)
+
+eligible$repeat_scan <- vapply(seq_len(nrow(eligible)), function(i) {
+  p <- followup_by_preg[[as.character(eligible$preg_id[i])]]
+  any(p$check_d_sas > eligible$check_d_sas[i] &
+      p$check_d_sas <= eligible$check_d_sas[i] + FOLLOWUP_DAYS)
+}, logical(1))
+
+# 4.5 טבלת שיעורי חזרה לפי קבוצת BPD
+sampling_tbl <- as.data.frame(
+  table(eligible$bpd_group, eligible$repeat_scan),
+  stringsAsFactors = FALSE
+)
+names(sampling_tbl) <- c("bpd_group", "repeat_scan", "pregnancies")
+sampling_tbl$repeat_scan <- sampling_tbl$repeat_scan == "TRUE"
+
+group_summary <- do.call(rbind, lapply(levels(eligible$bpd_group), function(g) {
+  x <- eligible[eligible$bpd_group == g, ]
+  data.frame(
+    bpd_group = g,
+    pregnancies = nrow(x),
+    returned = sum(x$repeat_scan),
+    return_rate_pct = round(100 * mean(x$repeat_scan), 1)
+  )
+}))
+print(group_summary, row.names = FALSE)
+save_table(group_summary, "04_sampling_bias_return_rates")
+save_table(sampling_tbl, "04_sampling_bias_contingency")
+save_table(week_cutoffs, "04_sampling_bias_week_cutoffs")
+
+# 4.6 מבחן קשר: Chi-square; אם יש תאים צפויים קטנים, Fisher exact
+contingency <- table(eligible$bpd_group, eligible$repeat_scan)
+chi <- suppressWarnings(chisq.test(contingency, correct = FALSE))
+
+if (any(chi$expected < 5)) {
+  test_name <- "Fisher exact test"
+  test_result <- fisher.test(contingency)
+} else {
+  test_name <- "Chi-square test"
+  test_result <- chi
+}
+
+test_tbl <- data.frame(
+  test = test_name,
+  statistic = if (test_name == "Chi-square test") unname(test_result$statistic) else NA_real_,
+  p_value = test_result$p.value,
+  n = sum(contingency)
+)
+print(test_tbl, row.names = FALSE)
+save_table(test_tbl, "04_sampling_bias_test")
+
+# 4.7 גרף: שיעור ההריונות עם מדידת מעקב בכל קבוצת BPD
+save_plot("04_sampling_bias_return_rates", function() {
+  bar <- barplot(
+    group_summary$return_rate_pct,
+    # heb() לא מטפלת בשבירת שורה ובפסיקים, ולכן כל שורה נבנית בנפרד
+    names.arg = paste0(heb(c("נמוך - מתחת ל-P10", "מרכזי", "גבוה - מעל P90")),
+                       "\n", "n = ", group_summary$pregnancies),
+    col = c(COL_REMOVE, COL_BULK, COL_KEEP),
+    # הציר מקוצר לטווח הערכים (כ-8%-14%), כדי שההבדל בין הקבוצות ייראה במצגת
+    border = NA, ylim = c(0, ceiling(max(group_summary$return_rate_pct) / 2) * 2 + 2), las = 1,
+    ylab = heb("הריונות עם מדידת מעקב בתוך 4 שבועות (%)"),
+    xlab = heb("קבוצת BPD במדידת הבסיס, שבועות 20-24"),
+    main = heb("שיעור החזרה למדידה לפי קבוצת BPD")
+  )
+  overall <- 100 * mean(eligible$repeat_scan)
+  abline(h = overall, lty = 2, col = "grey50")
+  text(par("usr")[2], overall, heb(paste0("כלל ההריונות: ", round(overall, 1), "%")),
+       adj = c(1, -0.4), cex = 0.85, col = "grey30")
+  mtext(paste0("Chi-square: p = ", signif(test_result$p.value, 2)),
+        side = 3, line = 0.3, cex = 0.85)
+  text(bar, group_summary$return_rate_pct,
+       labels = paste0(group_summary$return_rate_pct, "%"),
+       pos = 3, cex = 1)
+})
 
 ## ======================== 5. אימון מול בדיקה (חלק ד) ========================
 # מטרה: לבדוק שהמשתנה BPD מתנהג בצורה דומה בקובץ האימון (2000-2007)

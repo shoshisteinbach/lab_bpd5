@@ -1,0 +1,7 @@
+"bpd_group","repeat_scan","pregnancies"
+"Low (<P10)",FALSE,819
+"Middle (P10-P90)",FALSE,8963
+"High (>P90)",FALSE,669
+"Low (<P10)",TRUE,128
+"Middle (P10-P90)",TRUE,936
+"High (>P90)",TRUE,60
