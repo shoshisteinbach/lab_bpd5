@@ -474,11 +474,111 @@ save_plot("04_sampling_bias_return_rates", function() {
 ## ======================== 5. אימון מול בדיקה (חלק ד) ========================
 # מטרה: לבדוק שהמשתנה BPD מתנהג בצורה דומה בקובץ האימון (2000-2007)
 # ובקובץ הבדיקה (2008 והלאה), למשל ממוצע או חציון לפי שבוע.
-# מומלץ להריץ אחרי סעיפים 2-3.
+# רץ על הנתונים אחרי ההסרות של סעיפים 2-3.
+#
+# השיטה (פירוט הנימוקים ב-week 3/README.md, סעיף 8):
+#   1. סטנדרטיזציה לפי קובץ האימון בלבד: בכל שבוע מחשבים חציון ו-MAD של
+#      BPD מהאימון, ומתקננים בעזרתם את שני הקבצים. אם כל קובץ היה מתוקנן לפי
+#      עצמו, שניהם היו ממורכזים סביב 0 מעצם החישוב, והבדל אמיתי היה נעלם.
+#      התקנון לפי שבוע מנטרל גם הבדל בהרכב השבועות בין הקבצים.
+#   2. עקומות התפלגות (צפיפות) של הערך המתוקנן באימון מול בדיקה, בלי חלוקה
+#      לטרימסטרים.
+#   3. שיעור חריגה: אחוז המדידות מתחת לאחוזון 10 ומעל אחוזון 90 של האימון
+#      (בכל שבוע). אם הקבצים דומים, בבדיקה צפויים כ-10% בכל צד.
+#   4. מדווחים גודל אפקט, ולא רק ערך p (עם כ-57,000 מדידות כל הבדל זניח מובהק).
+#      כל מדד בודק היבט אחר של ההבדל בין ההתפלגויות:
+#        - הזזה (מיקום): ההבדל בחציון ובממוצע, בערך המתוקנן ובמ"מ, ו-d של Cohen,
+#          שהוא ההבדל ביחידות של סטיית תקן (0.2 = אפקט קטן).
+#        - פיזור: יחס ה-MAD. MAD ולא סטיית תקן, כי הוא חסין לזנבות.
+#        - צורה: הסטטיסטי D של Kolmogorov-Smirnov, ההבדל המקסימלי בין
+#          ההתפלגויות המצטברות. KS רגיש לכל סוג של הבדל ולא מניח נורמליות.
+#          ערך ה-p מדווח כתוספת בלבד, והוא קירוב בגלל ערכים זהים (BPD שלם).
+#        - שיעורי החריגה: המדד המעשי, כמה נשים יסומנו מתחת לאחוזון 10 של האימון.
+#      ההנחה: התצפיות בלתי תלויות (לא בוחרים מדידה אחת לכל הריון), אף שיש
+#      כמה מדידות לכל הריון.
 #
 # הסעיף לא משנה את dat; הוא רק מפיק תוצאות.
 
-# TODO: ההשוואה בין הקבצים וגרף
+cmp <- dat[!dat$outlier & !dat$near_dup & (dat$year %in% TRAIN_YEARS | dat$year >= TEST_FROM), ]
+cmp$set <- factor(ifelse(cmp$year %in% TRAIN_YEARS, "train", "test"), levels = c("train", "test"))
+is_tr <- cmp$set == "train"
+
+# 5.1 ערכי ייחוס מהאימון בלבד, בכל שבוע
+ref <- data.frame(week = sort(unique(cmp$week[is_tr])))
+ref$med <- tapply(cmp$bpd[is_tr], cmp$week[is_tr], median)[as.character(ref$week)]
+ref$mad <- tapply(cmp$bpd[is_tr], cmp$week[is_tr], mad)[as.character(ref$week)]
+ref$p10 <- tapply(cmp$bpd[is_tr], cmp$week[is_tr], quantile, 0.10)[as.character(ref$week)]
+ref$p90 <- tapply(cmp$bpd[is_tr], cmp$week[is_tr], quantile, 0.90)[as.character(ref$week)]
+m <- match(cmp$week, ref$week)
+cmp$z      <- (cmp$bpd - ref$med[m]) / ref$mad[m]
+cmp$dev_mm <- cmp$bpd - ref$med[m]
+cmp$below  <- cmp$bpd < ref$p10[m]
+cmp$above  <- cmp$bpd > ref$p90[m]
+
+# 5.2 גודל אפקט ושיעורי חריגה (רווח סמך 95% בהנחת תצפיות בלתי תלויות)
+prop_ci <- function(x) { ci <- prop.test(sum(x), length(x))$conf.int; round(100 * ci, 1) }
+ks <- suppressWarnings(ks.test(cmp$z[is_tr], cmp$z[!is_tr]))
+effect_tbl <- do.call(rbind, lapply(levels(cmp$set), function(s) {
+  x <- cmp[cmp$set == s, ]
+  data.frame(set = s, scans = nrow(x),
+             median_z = round(median(x$z), 3), median_dev_mm = round(median(x$dev_mm), 2),
+             mean_z = round(mean(x$z), 3), mean_dev_mm = round(mean(x$dev_mm), 2),
+             mad_z = round(mad(x$z), 3),
+             pct_below_p10 = round(100 * mean(x$below), 1),
+             ci_below = paste(prop_ci(x$below), collapse = "-"),
+             pct_above_p90 = round(100 * mean(x$above), 1),
+             ci_above = paste(prop_ci(x$above), collapse = "-"))
+}))
+effect_tbl$spread_ratio_vs_train <- round(effect_tbl$mad_z / effect_tbl$mad_z[1], 3)
+# d של Cohen: הבדל הממוצעים חלקי סטיית התקן המשותפת (בערך המתוקנן)
+sd_pooled <- sqrt(((sum(is_tr) - 1) * var(cmp$z[is_tr]) + (sum(!is_tr) - 1) * var(cmp$z[!is_tr])) /
+                  (nrow(cmp) - 2))
+effect_tbl$cohen_d_vs_train <- round(c(0, (mean(cmp$z[!is_tr]) - mean(cmp$z[is_tr])) / sd_pooled), 3)
+print(effect_tbl, row.names = FALSE)
+cat("Kolmogorov-Smirnov: D =", round(unname(ks$statistic), 3), "| p =", signif(ks$p.value, 3), "\n")
+save_table(effect_tbl, "05_train_test_effect")
+save_table(data.frame(test = "Kolmogorov-Smirnov (z, train vs test)",
+                      D = unname(ks$statistic), p_value = ks$p.value,
+                      n_train = sum(is_tr), n_test = sum(!is_tr)), "05_train_test_ks")
+
+# שיעורי חריגה של קובץ הבדיקה בכל שבוע, והרכב השבועות בשני הקבצים
+wk_cmp <- data.frame(week = ref$week,
+  train_scans = as.vector(table(factor(cmp$week[is_tr], levels = ref$week))),
+  test_scans  = as.vector(table(factor(cmp$week[!is_tr], levels = ref$week))))
+wk_cmp$train_pct_of_file <- round(100 * wk_cmp$train_scans / sum(wk_cmp$train_scans), 1)
+wk_cmp$test_pct_of_file  <- round(100 * wk_cmp$test_scans / sum(wk_cmp$test_scans), 1)
+wk_cmp$test_pct_below_p10 <- round(100 * tapply(cmp$below[!is_tr], factor(cmp$week[!is_tr], levels = ref$week), mean), 1)
+wk_cmp$test_pct_above_p90 <- round(100 * tapply(cmp$above[!is_tr], factor(cmp$week[!is_tr], levels = ref$week), mean), 1)
+save_table(wk_cmp, "05_train_test_by_week")
+
+# 5.3 גרף: עקומות ההתפלגות של הערך המתוקנן, אימון מול בדיקה
+save_plot("05_train_test_density", function() {
+  # רוחב החלקה משותף ורחב: כ-93% מערכי ה-BPD שלמים, ולכן הערך המתוקנן "קופץ" במדרגות.
+  # רוחב אוטומטי שונה לכל קובץ היה מייצר גלים שונים ונראה כמו הבדל שאינו קיים.
+  DENS_BW <- 0.3
+  d_tr <- density(cmp$z[is_tr], bw = DENS_BW, from = -5, to = 5, n = 512)
+  d_te <- density(cmp$z[!is_tr], bw = DENS_BW, from = -5, to = 5, n = 512)
+  plot(d_tr, col = COL_BULK, lwd = 2.5, las = 1, xlim = c(-5, 5),
+       ylim = c(0, max(d_tr$y, d_te$y) * 1.15), zero.line = FALSE,
+       xlab = heb("BPD מתוקנן לפי החציון וה-MAD של קובץ האימון באותו שבוע"),
+       ylab = heb("צפיפות"),
+       main = heb("התפלגות ה-BPD אחרי סטנדרטיזציה לפי קובץ האימון"))
+  lines(d_te, col = COL_REMOVE, lwd = 2.5, lty = 2)
+  abline(v = 0, col = "grey70")
+  te <- effect_tbl[effect_tbl$set == "test", ]
+  mtext(paste0("mean shift = ", te$mean_z, " (", te$mean_dev_mm, " mm) | Cohen's d = ",
+               te$cohen_d_vs_train, " | spread ratio = ", te$spread_ratio_vs_train,
+               " | KS D = ", round(unname(ks$statistic), 3)),
+        side = 3, line = 0.3, cex = 0.85)
+  legend("topleft", bty = "n", lwd = 2.5, lty = c(1, 2), col = c(COL_BULK, COL_REMOVE),
+         legend = heb(c("אימון 2000-2007", "בדיקה 2008 ואילך")))
+  legend("topright", bty = "n", legend = c(
+    paste0("n: train ", sum(is_tr), " | test ", sum(!is_tr)),
+    heb("מתחת לאחוזון 10 של האימון:"),
+    paste0("train ", effect_tbl$pct_below_p10[1], "% | test ", te$pct_below_p10, "%"),
+    heb("מעל אחוזון 90 של האימון:"),
+    paste0("train ", effect_tbl$pct_above_p90[1], "% | test ", te$pct_above_p90, "%")))
+})
 
 ## ======================== 6. הקבצים הסופיים ================================
 # הסרת הסימונים מסעיפים 2-3 וחלוקה לפי שנה.
