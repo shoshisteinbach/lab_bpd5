@@ -1,2 +1,2 @@
 "test","D","p_value","n_train","n_test"
-"Kolmogorov-Smirnov (z, train vs test)",0.0109234179509646,0.200871535005838,44769,12263
+"Kolmogorov-Smirnov (z, train vs test)",0.00871724023352433,0.420755169386449,43741,13291

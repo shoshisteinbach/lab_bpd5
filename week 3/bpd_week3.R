@@ -295,6 +295,11 @@ save_plot("03_near_gap_days", function() {
                  ylab = heb("מספר זוגות מדידות"),
                  main = heb("הפער בימים בין מדידות עוקבות של אותו הריון"))
   axis(1, at = mid, labels = 0:28, cex.axis = 0.8)
+  # מספר הזוגות מעל 0-7 ימים: הסמוכות בכתום, ו-4 עד 7 באפור. כך רואים למה לא בחרנו 7
+  # (אחרי 3 ימים המספרים נשארים נמוכים, ובשבעה ימים יש קפיצה לביקור שבועי רגיל)
+  lab <- 1:8
+  text(mid[lab], cnt[lab], cnt[lab], pos = 3, cex = 0.9,
+       col = ifelse(lab <= NEAR_DAYS + 1, COL_REMOVE, "grey30"))
   legend("topleft", bty = "n", pch = 15, pt.cex = 1.5, col = c(COL_REMOVE, COL_BULK),
          legend = heb(c(paste0("סמוכות: עד ", NEAR_DAYS, " ימים - נשארת רק הראשונה"),
                         "מדידות נפרדות")))
@@ -304,10 +309,15 @@ save_plot("03_near_gap_days", function() {
 save_plot("03_near_bpd_pairs", function() {
   k <- which(gap <= NEAR_DAYS)
   b1 <- dat$bpd[o][k - 1]; b2 <- dat$bpd[o][k]
+  # אותו טווח בשני הצירים, ושנתה כל 10 מ"מ, כדי שאפשר יהיה לקרוא ערכים
+  lim <- range(b1, b2)
   plot(b1, b2, pch = 16, cex = 0.7, col = alpha_col(COL_KEEP, 0.6), las = 1,
+       xlim = lim, ylim = lim, xaxt = "n", yaxt = "n",
        xlab = heb("BPD במדידה הראשונה (מ\"מ)"),
        ylab = heb("BPD במדידה הסמוכה (מ\"מ)"),
        main = heb(paste0("מדידות סמוכות (עד ", NEAR_DAYS, " ימים): BPD במדידה הראשונה מול הסמוכה")))
+  ticks <- seq(ceiling(lim[1] / 10) * 10, floor(lim[2] / 10) * 10, 10)
+  axis(1, at = ticks); axis(2, at = ticks, las = 1)
   abline(0, 1, col = COL_REMOVE, lwd = 1.5)
   legend("topleft", bty = "n", lty = 1, col = COL_REMOVE, lwd = 1.5,
          legend = heb(c("קו שוויון: אותו ערך בשתי המדידות")))
@@ -452,20 +462,24 @@ save_plot("04_sampling_bias_return_rates", function() {
     group_summary$return_rate_pct,
     # heb() לא מטפלת בשבירת שורה ובפסיקים, ולכן כל שורה נבנית בנפרד
     names.arg = paste0(heb(c("נמוך - מתחת ל-P10", "מרכזי", "גבוה - מעל P90")),
-                       "\n", "n = ", group_summary$pregnancies),
+                       "\n", "n = ", format(group_summary$pregnancies, big.mark = ",", trim = TRUE)),
     col = c(COL_REMOVE, COL_BULK, COL_KEEP),
     # הציר מקוצר לטווח הערכים (כ-8%-14%), כדי שההבדל בין הקבוצות ייראה במצגת
-    border = NA, ylim = c(0, ceiling(max(group_summary$return_rate_pct) / 2) * 2 + 2), las = 1,
+    border = NA, ylim = c(0, ceiling(max(group_summary$return_rate_pct) / 2) * 2 + 2),
+    yaxt = "n",
     ylab = heb("הריונות עם מדידת מעקב בתוך 4 שבועות (%)"),
     xlab = heb("קבוצת BPD במדידת הבסיס, שבועות 20-24"),
     main = heb("שיעור החזרה למדידה לפי קבוצת BPD")
   )
+  axis(2, at = seq(0, par("usr")[4], 2), las = 1)     # שנתה כל 2 נקודות אחוז
   overall <- 100 * mean(eligible$repeat_scan)
   abline(h = overall, lty = 2, col = "grey50")
   text(par("usr")[2], overall, heb(paste0("כלל ההריונות: ", round(overall, 1), "%")),
        adj = c(1, -0.4), cex = 0.85, col = "grey30")
-  mtext(paste0("Chi-square: p = ", signif(test_result$p.value, 2)),
-        side = 3, line = 0.3, cex = 0.85)
+  # רווח קשיח ( ) בתוך ביטוי באנגלית, כדי ש-heb() לא תהפוך את סדר המילים בו
+  p_txt <- if (test_result$p.value < 0.001) "p < 0.001" else
+    paste0("p = ", signif(test_result$p.value, 2))
+  mtext(heb(paste0("מבחן חי בריבוע: ", p_txt)), side = 3, line = 0.3, cex = 0.85)
   text(bar, group_summary$return_rate_pct,
        labels = paste0(group_summary$return_rate_pct, "%"),
        pos = 3, cex = 1)
@@ -499,18 +513,13 @@ save_plot("04_sampling_bias_return_rates", function() {
 #
 # הסעיף לא משנה את dat; הוא רק מפיק תוצאות.
 
-# החלוקה לאימון ובדיקה היא לפי הריון ולא לפי מדידה: כל הריון עובר בשלמותו לקובץ
-# של השנה של המדידה הראשונה שלו (מבין המדידות שנשארו). אחרת 469 הריונות שעוברים
-# מסוף 2007 ל-2008 היו מפוצלים בין הקבצים, וקובץ הבדיקה לא היה בלתי תלוי באימון.
+# החלוקה לאימון ובדיקה היא לפי שנת המדידה, כפי שהוגדר במטלה: אימון 2000-2007,
+# בדיקה 2008 והלאה. הסתייגות: הריונות שהתחילו ב-2007 והמשיכו ל-2008 מפוצלים בין
+# הקבצים, ולכן הקבצים אינם בלתי תלויים לגמרי (ההיקף מודפס בסעיף 6).
 # אותה חלוקה משמשת גם בסעיף 6.
 keep <- !dat$outlier & !dat$near_dup
-first_day <- ave(ifelse(keep, dat$check_d_sas, Inf), dat$preg_id, FUN = min)
-dat$split_year <- ave(ifelse(keep & dat$check_d_sas == first_day, dat$year, Inf), dat$preg_id, FUN = min)
-dat$set <- ifelse(dat$split_year %in% TRAIN_YEARS, "train",
-                  ifelse(dat$split_year >= TEST_FROM & is.finite(dat$split_year), "test", NA))
-cat("Scans moved by whole-pregnancy split:",
-    sum(keep & dat$set == "train" & dat$year >= TEST_FROM), "into train |",
-    sum(keep & dat$set == "test" & dat$year %in% TRAIN_YEARS), "into test\n")
+dat$set <- ifelse(dat$year %in% TRAIN_YEARS, "train",
+                  ifelse(dat$year >= TEST_FROM, "test", NA))
 
 cmp <- dat[keep & !is.na(dat$set), ]
 cmp$set <- factor(cmp$set, levels = c("train", "test"))
@@ -571,26 +580,30 @@ save_plot("05_train_test_density", function() {
   DENS_BW <- 0.3
   d_tr <- density(cmp$z[is_tr], bw = DENS_BW, from = -5, to = 5, n = 512)
   d_te <- density(cmp$z[!is_tr], bw = DENS_BW, from = -5, to = 5, n = 512)
-  plot(d_tr, col = COL_BULK, lwd = 2.5, las = 1, xlim = c(-5, 5),
+  plot(d_tr, col = COL_BULK, lwd = 2.5, las = 1, xlim = c(-5, 5), xaxt = "n",
        ylim = c(0, max(d_tr$y, d_te$y) * 1.15), zero.line = FALSE,
        xlab = heb("BPD מתוקנן לפי החציון וה-MAD של קובץ האימון באותו שבוע"),
        ylab = heb("צפיפות"),
        main = heb("התפלגות ה-BPD אחרי סטנדרטיזציה לפי קובץ האימון"))
+  axis(1, at = -5:5)     # שנתה בכל יחידה, כדי לראות איפה נמצאים -3, 3 וכו'
   lines(d_te, col = COL_REMOVE, lwd = 2.5, lty = 2)
   abline(v = 0, col = "grey70")
   te <- effect_tbl[effect_tbl$set == "test", ]
-  mtext(paste0("mean shift = ", te$mean_z, " (", te$mean_dev_mm, " mm) | Cohen's d = ",
-               te$cohen_d_vs_train, " | spread ratio = ", te$spread_ratio_vs_train,
-               " | KS D = ", round(unname(ks$statistic), 3)),
+  fmt <- function(x) format(x, big.mark = ",", trim = TRUE)
+  mtext(heb(paste0("הזזת הממוצע: ", sprintf("%.2f", te$mean_dev_mm + 0), " מ\"מ | d של Cohen: ",
+                   te$cohen_d_vs_train, " | יחס פיזור: ", sprintf("%.1f", te$spread_ratio_vs_train),
+                   " | KS: D = ", round(unname(ks$statistic), 3))),
         side = 3, line = 0.3, cex = 0.85)
   legend("topleft", bty = "n", lwd = 2.5, lty = c(1, 2), col = c(COL_BULK, COL_REMOVE),
-         legend = heb(c("אימון 2000-2007", "בדיקה 2008 ואילך")))
+         legend = heb(c("קובץ אימון 2000-2007", "קובץ בדיקה 2008 ואילך")))
   legend("topright", bty = "n", legend = c(
-    paste0("n: train ", sum(is_tr), " | test ", sum(!is_tr)),
+    heb(paste0("מדידות: אימון ", fmt(sum(is_tr)), " | בדיקה ", fmt(sum(!is_tr)))),
     heb("מתחת לאחוזון 10 של האימון:"),
-    paste0("train ", effect_tbl$pct_below_p10[1], "% | test ", te$pct_below_p10, "%"),
+    heb(paste0("אימון ", sprintf("%.1f", effect_tbl$pct_below_p10[1]), "% | בדיקה ",
+               sprintf("%.1f", te$pct_below_p10), "%")),
     heb("מעל אחוזון 90 של האימון:"),
-    paste0("train ", effect_tbl$pct_above_p90[1], "% | test ", te$pct_above_p90, "%")))
+    heb(paste0("אימון ", sprintf("%.1f", effect_tbl$pct_above_p90[1]), "% | בדיקה ",
+               sprintf("%.1f", te$pct_above_p90), "%"))))
 })
 
 ## ======================== 6. הקבצים הסופיים ================================
@@ -601,10 +614,10 @@ save_plot("05_train_test_density", function() {
 #   - עמודות העבודה מוסרות: bpd_rz ו-ratio_rz (חושבו על כל קובץ הבסיס ואין להן
 #     משמעות בהמשך), outlier ו-near_dup (תמיד FALSE אחרי ההסרה). hc_mm נשאר.
 
-#   - כל הריון עובר בשלמותו לקובץ של השנה של המדידה הראשונה שלו (העמודה set,
-#     שנבנית בסעיף 5), כדי שאף הריון לא יופיע בשני הקבצים.
+#   - החלוקה לפי שנת המדידה, כפי שהוגדר במטלה (העמודה set, שנבנית בסעיף 5).
+#     הריונות שהתחילו ב-2007 והמשיכו ל-2008 מפוצלים בין הקבצים (מודפס למטה).
 
-DROP_COLS <- c("bpd_rz", "ratio_rz", "outlier", "near_dup", "split_year", "set")
+DROP_COLS <- c("bpd_rz", "ratio_rz", "outlier", "near_dup", "set")
 
 clean <- dat[!dat$outlier & !dat$near_dup, ]
 clean <- clean[order(clean$preg_id, clean$check_d_sas), ]
@@ -620,8 +633,14 @@ final_tbl <- data.frame(
   weeks        = c(paste(range(train$week), collapse = "-"), paste(range(test$week), collapse = "-")),
   columns      = ncol(train))
 print(final_tbl, row.names = FALSE)
-cat("Pregnancies split between train and test:",
-    length(intersect(train$preg_id, test$preg_id)), "\n")
+split_ids <- intersect(train$preg_id, test$preg_id)
+cat("Pregnancies split between train and test:", length(split_ids), "| their scans:",
+    sum(train$preg_id %in% split_ids) + sum(test$preg_id %in% split_ids),
+    "(", round(100 * (sum(train$preg_id %in% split_ids) + sum(test$preg_id %in% split_ids)) /
+               (nrow(train) + nrow(test)), 1), "% of scans )\n")
+save_table(data.frame(split_pregnancies = length(split_ids),
+                      scans_in_them = sum(train$preg_id %in% split_ids) + sum(test$preg_id %in% split_ids)),
+           "06_split_pregnancies")
 save_table(final_tbl, "06_final_files")
 
 write.csv(train, file.path("week 3", "train.csv"), row.names = FALSE)
