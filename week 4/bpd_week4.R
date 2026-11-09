@@ -476,7 +476,29 @@ if (!is.null(mean_fit) || !is.null(sd_fit)) {
 # 14-40) וטבלת ערכי האחוזונים לכל שבוע שלם (CSV). אפשר להוסיף את ענן הנתונים.
 # כלים מוכנים: model_percentile(new_model, w, PERCENTILES).
 
-# TODO: חישוב האחוזונים והגרף (save_plot, heb)
+percentile_weeks <- 14:40
+percentile_labels <- paste0("P", sub("\\.0$", "", format(100 * PERCENTILES, trim = TRUE)))
+percentile_values <- sapply(PERCENTILES, function(p)
+  model_percentile(new_model, percentile_weeks, p))
+percentile_table <- data.frame(week = percentile_weeks, percentile_values,
+                               check.names = FALSE)
+names(percentile_table)[-1] <- percentile_labels
+save_table(percentile_table, "06_percentiles_by_week")
+
+save_plot("06_percentile_curves", function() {
+  w <- seq(14, 40, by = 0.1)
+  curves <- sapply(PERCENTILES, function(p) model_percentile(new_model, w, p))
+  cols <- c("#8C510A", "#D8B365", "#5AB4AC", "#01665E", "#003C30")
+  plot(train$pregweek, train$bpd, pch = 16, cex = 0.22,
+       col = alpha_col(COL_BULK, 0.12), xlim = c(14, 40), ylim = c(10, 110),
+       xaxt = "n", yaxt = "n", xlab = heb("שבוע הריון"),
+       ylab = heb("BPD (מ\"מ)"), main = heb("אחוזוני BPD לפי שבוע הריון"),
+       panel.first = soft_grid(seq(10, 110, 10)))
+  week_axis()
+  axis(2, at = seq(10, 110, 10), las = 1)
+  for (j in seq_along(PERCENTILES)) lines(w, curves[, j], col = cols[j], lwd = 2.5)
+  legend("topleft", bty = "n", lwd = 2.5, col = cols, legend = percentile_labels)
+})
 
 ## ======================== 7. משימה 4 - הצלחת המודל מול הקיימים ===============
 # מטרה: לתאר את הצלחת המודל החדש לעומת המודלים הקיימים (had_model, kur_model)
@@ -487,4 +509,110 @@ if (!is.null(mean_fit) || !is.null(sd_fit)) {
 # בדיקה על קובץ הבדיקה (test) כבדיקה משלימה.
 # כלים מוכנים: model_z(model, w, y), model_percentile(model, w, p).
 
-# TODO: חישוב השיעורים, הטבלה והגרף
+models_compare <- list(new_model, had_model, kur_model)
+model_names <- vapply(models_compare, `[[`, "", "name")
+names(models_compare) <- model_names
+weeks_compare <- sort(unique(train$week))
+preg_ids <- unique(train$preg_id)
+preg_index <- match(train$preg_id, preg_ids)
+week_index <- match(train$week, weeks_compare)
+n_preg <- length(preg_ids)
+n_week <- length(weeks_compare)
+
+# דגלים: האם המדידה נמצאת מתחת לאחוזון הנתון? כל מטריצה היא n מדידות × 5 אחוזונים.
+comparison_flags <- lapply(models_compare, function(model) {
+  sapply(PERCENTILES, function(p)
+    train$bpd < model_percentile(model, train$pregweek, p))
+})
+
+# רווחי סמך באחוזונים של bootstrap אשכולות לפי הריון. בכל חזרה נדגמים
+# הריונות עם החזרה; כל המדידות מהריון שנדגם מקבלות את אותו משקל bootstrap.
+# העמודה הראשונה מסכמת את כל המדידות, והיתר מסכמות לפי שבוע.
+BOOT_REPS <- 1000
+set.seed(2026)
+n_metrics <- length(models_compare) * length(PERCENTILES)
+boot_rates <- array(NA_real_, dim = c(BOOT_REPS, n_metrics, n_week + 1))
+for (b in seq_len(BOOT_REPS)) {
+  multiplicity <- tabulate(sample.int(n_preg, n_preg, replace = TRUE), nbins = n_preg)
+  row_weights <- multiplicity[preg_index]
+  weekly_denominator <- as.vector(rowsum(row_weights, week_index))
+  metric <- 0L
+  for (model_name in model_names) {
+    flags <- comparison_flags[[model_name]] * 1
+    total_rates <- colSums(flags * row_weights) / sum(row_weights)
+    weekly_numerator <- rowsum(flags * row_weights, week_index)
+    weekly_rates <- t(weekly_numerator / weekly_denominator)
+    for (j in seq_along(PERCENTILES)) {
+      metric <- metric + 1L
+      boot_rates[b, metric, ] <- c(total_rates[j], weekly_rates[j, ])
+    }
+  }
+}
+
+comparison_rows <- vector("list", n_metrics * (n_week + 1))
+ri <- 0L
+metric <- 0L
+for (model_name in model_names) {
+  flags <- comparison_flags[[model_name]]
+  for (j in seq_along(PERCENTILES)) {
+    metric <- metric + 1L
+    observed <- c(mean(flags[, j]),
+      as.vector(tapply(flags[, j], train$week, mean)))
+    cis <- t(apply(boot_rates[, metric, ], 2, quantile,
+                   probs = c(0.025, 0.975), na.rm = TRUE, names = FALSE))
+    for (g in seq_len(n_week + 1)) {
+      ri <- ri + 1L
+      is_all <- g == 1L
+      use <- if (is_all) rep(TRUE, nrow(train)) else train$week == weeks_compare[g - 1L]
+      nominal <- 100 * PERCENTILES[j]
+      comparison_rows[[ri]] <- data.frame(
+        model = model_name,
+        week = if (is_all) "All" else as.character(weeks_compare[g - 1L]),
+        percentile = nominal, expected_pct = nominal,
+        observed_pct = 100 * observed[g],
+        ci_low_pct = 100 * cis[g, 1], ci_high_pct = 100 * cis[g, 2],
+        n_scans = sum(use), difference_pp = 100 * observed[g] - nominal,
+        stringsAsFactors = FALSE)
+    }
+  }
+}
+comparison_table <- do.call(rbind, comparison_rows)
+comparison_table$week_order <- 0L
+is_week_row <- comparison_table$week != "All"
+comparison_table$week_order[is_week_row] <- as.integer(comparison_table$week[is_week_row])
+comparison_table <- comparison_table[order(comparison_table$percentile,
+  comparison_table$model, comparison_table$week_order), ]
+comparison_table$week_order <- NULL
+save_table(comparison_table, "07_percentile_coverage")
+
+# גרף כיול: לכל אחוזון מוצגים שיעור החריגה בפועל, רווח הסמך, וקו השיעור הנקוב.
+save_plot("07_percentile_coverage", function() {
+  op <- par(mfrow = c(2, 3), mar = c(4.2, 4.2, 3, 1))
+  on.exit(par(op))
+  model_cols <- c("Fractional polynomials" = COL_NEW,
+                  "Hadlock" = COL_OLD, "Kurmanavicius" = COL_OLD2)
+  for (p in 100 * PERCENTILES) {
+    d <- comparison_table[comparison_table$percentile == p & comparison_table$week != "All", ]
+    d$week_num <- as.integer(d$week)
+    pad <- max(2, p * 0.15)
+    ylim <- c(max(0, min(d$ci_low_pct, p) - pad),
+              min(100, max(d$ci_high_pct, p) + pad))
+    plot(NA, xlim = c(13, 40), ylim = ylim, xaxt = "n",
+         xlab = heb("שבוע הריון"), ylab = heb("אחוז המדידות מתחת לעקומה"),
+         main = paste0("P", format(p, trim = TRUE)))
+    week_axis()
+    abline(h = p, lty = 2, col = "grey40")
+    for (mn in model_names) {
+      z <- d[d$model == mn, ]
+      lines(z$week_num, z$observed_pct, type = "b", pch = 16, cex = 0.6,
+            col = model_cols[mn])
+      nonzero_ci <- z$ci_high_pct > z$ci_low_pct
+      if (any(nonzero_ci)) arrows(z$week_num[nonzero_ci], z$ci_low_pct[nonzero_ci],
+        z$week_num[nonzero_ci], z$ci_high_pct[nonzero_ci],
+        angle = 90, code = 3, length = 0.025, col = model_cols[mn])
+    }
+  }
+  plot.new()
+  legend("center", bty = "n", col = model_cols, lty = 1, pch = 16,
+         legend = names(model_cols), cex = 0.9)
+})
