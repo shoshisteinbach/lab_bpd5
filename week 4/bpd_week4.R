@@ -69,9 +69,12 @@ heb <- function(x) {
   vapply(x, one, "", USE.NAMES = FALSE)
 }
 
-save_plot <- function(name, draw, width = 10, height = 6) {
+# pointsize: גודל הגופן. הגרפים שנכנסים למצגת מוקטנים בה לכ-7.6 אינץ', ולכן מקבלים
+# PLOT_PT_SLIDE, כדי שהטקסט בהם ייראה בגודל הטקסט בשאר הגרפים במצגת
+PLOT_PT_SLIDE <- 16
+save_plot <- function(name, draw, width = 10, height = 6, pointsize = 12) {
   png(file.path(OUT_DIR, paste0(name, ".png")), width = width, height = height,
-      units = "in", res = 150)
+      units = "in", res = 150, pointsize = pointsize)
   tryCatch(draw(), finally = dev.off())
   invisible(NULL)
 }
@@ -261,7 +264,7 @@ save_plot("04_mean_fit", function() {
          pt.bg = c(NA, "white", NA), col = c(alpha_col(COL_BULK, 0.5), COL_BULK, COL_NEW),
          legend = heb(c("מדידה בודדת", "ממוצע המדידות בשבוע", "העקומה שנבחרה")))
   text(40, 18, expression("BPD = 3.727 + 0.15329" ~ w^2 ~ "- 0.002448" ~ w^3), adj = 1, col = COL_NEW, font = 2)
-})
+}, pointsize = PLOT_PT_SLIDE)
 
 save_plot("04_mean_residuals_by_week", function() {
   lim <- 1.25
@@ -385,7 +388,7 @@ save_plot("05_sd_fit", function() {
          pt.bg = c("white", NA, NA, NA), col = c(COL_BULK, COL_NEW, COL_OLD2, "grey50"),
          legend = c(heb(c("אומדן לכל שבוע", "קו ישר, הנבחר")),
                     heb("החזקות (3,3)"), heb("סטיית תקן קבועה")))
-})
+}, pointsize = PLOT_PT_SLIDE)
 
 # בדיקת ההנחה: אזור האחוזונים שלנו מסומן בקווים אנכיים
 save_plot("05_z_qq", function() {
@@ -400,7 +403,7 @@ save_plot("05_z_qq", function() {
   text(0, 5.3, heb("בין הקווים: האחוזונים 3 עד 97.5"), col = "grey30")
   legend("bottomright", bty = "n", pch = c(16, NA), lty = c(NA, 1), lwd = c(NA, 2),
          col = c(COL_BULK, COL_NEW), legend = heb(c("ציוני Z בפועל", "התאמה מושלמת לנורמלית")))
-})
+}, pointsize = PLOT_PT_SLIDE)
 
 # אותה בדיקה בנפרד לכל תקופה בהריון
 save_plot("05_z_qq_by_period", function() {
@@ -498,7 +501,7 @@ save_plot("06_percentile_curves", function() {
   axis(2, at = seq(10, 110, 10), las = 1)
   for (j in seq_along(PERCENTILES)) lines(w, curves[, j], col = cols[j], lwd = 2.5)
   legend("topleft", bty = "n", lwd = 2.5, col = cols, legend = percentile_labels)
-})
+}, pointsize = PLOT_PT_SLIDE)
 
 ## ======================== 7. משימה 4 - הצלחת המודל מול הקיימים ===============
 # מטרה: לתאר את הצלחת המודל החדש לעומת המודלים הקיימים (had_model, kur_model)
