@@ -44,10 +44,13 @@ save_table <- function(df, name) {
 }
 
 # גרפים: אותו עיצוב כמו בשבוע 3 (10x6 אינץ', כותרת מודגשת, צבעים מתאימים גם
-# לעיוורי צבעים). אפור = הנתונים, כתום = המודל החדש, כחול = מודל קיים.
-COL_NEW  <- "#D55E00"
-COL_OLD  <- "#0072B2"
+# לעיוורי צבעים). אותם גוונים כמו בגרפים של המצגת, ולכל צבע משמעות קבועה:
+# כתום = המודל החדש או המודל שנבחר, כחול = Hadlock ומודל קיים,
+# ירוק = Kurmanavicius, אפור-כחלחל = חלופה שנשקלה, אפור = הנתונים.
+COL_NEW  <- "#C2510F"
+COL_OLD  <- "#0B6AA8"
 COL_OLD2 <- "#009E73"
+COL_ALT  <- "#4F606C"
 COL_BULK <- "grey30"
 alpha_col <- function(col, a) adjustcolor(col, alpha.f = a)
 
@@ -310,7 +313,7 @@ fold <- sample(rep(seq_len(K_FOLDS), length.out = length(ug)))[match(train$preg_
 # מתאימים תוחלת וסטיית תקן על 4 קבוצות, ובודקים על החמישית כמה מדידות
 # נמצאות מתחת לכל עקומה. הקנס בכל אחוזון הוא המרחק מהאחוז הרצוי, מחולק
 # ב-sqrt(p(1-p)). ממוצע על השבועות (ובהרצאה סכום: אותו דירוג) ועל האחוזונים.
-cv_percentile_penalty <- function(sd_powers) {
+cv_mu_sd <- function(sd_powers) {
   mu <- s <- numeric(nrow(train))
   for (k in seq_len(K_FOLDS)) {
     tr <- fold != k
@@ -320,8 +323,13 @@ cv_percentile_penalty <- function(sd_powers) {
     mu[!tr] <- m$predict(train$pregweek[!tr])
     s[!tr]  <- sqrt(pi / 2) * sf$predict(train$pregweek[!tr])
   }
+  list(mu = mu, s = s)
+}
+
+cv_percentile_penalty <- function(sd_powers) {
+  o <- cv_mu_sd(sd_powers)
   mean(sapply(PERCENTILES, function(p) {
-    below <- train$bpd < mu + qnorm(p) * s
+    below <- train$bpd < o$mu + qnorm(p) * o$s
     mean(abs(tapply(below, train$week, mean) - p)) / sqrt(p * (1 - p))
   }))
 }
@@ -347,6 +355,21 @@ sd_coef <- data.frame(term = c("intercept", paste0("(w/10)^", sd_fit$powers)),
 save_table(sd_coef, "05_sd_final_model")
 cat("\nFinal SD model (coefficients after multiplying by sqrt(pi/2)):\n")
 print(sd_coef, digits = 7)
+
+# ה2. האם יש התאמת יתר? אותם מדדים פעם על הנתונים שעליהם המודל הותאם, ופעם
+# על הריונות מוסתרים (cross-validation). אם הם כמעט זהים, אין התאמת יתר.
+cv_final <- cv_mu_sd(sd_powers)
+mu_in <- mean_fit$predict(train$pregweek)
+s_in  <- sqrt(pi / 2) * sd_fit$predict(train$pregweek)
+cv_check <- data.frame(
+  measure = c("mean_rmse_mm", paste0("pct_below_P", 100 * PERCENTILES)),
+  fitted_data = c(sqrt(mean(resid_now^2)),
+                  sapply(PERCENTILES, function(p) 100 * mean(train$bpd < mu_in + qnorm(p) * s_in))),
+  hidden_pregnancies = c(mean_table$cv_rmse[1],
+                         sapply(PERCENTILES, function(p) 100 * mean(train$bpd < cv_final$mu + qnorm(p) * cv_final$s))))
+save_table(cv_check, "05_cv_check")
+cat("\nIn-sample vs cross-validation:\n")
+print(cv_check, digits = 5)
 
 # ו. בדיקת ההנחה: ציוני Z צריכים להתפלג N(0,1), בלי תלות בשבוע
 z_scores <- resid_now / (sqrt(pi / 2) * sd_fit$predict(train$pregweek))
@@ -379,13 +402,13 @@ save_plot("05_sd_fit", function() {
   week_axis()
   axis(2, at = seq(2.25, 4, 0.25), las = 1)
   abline(h = const, col = "grey50", lwd = 2, lty = 3)
-  lines(weeks, sqrt(pi / 2) * alt_33$predict(weeks), col = COL_OLD2, lwd = 2, lty = 2)
+  lines(weeks, sqrt(pi / 2) * alt_33$predict(weeks), col = COL_ALT, lwd = 2, lty = 2)
   lines(weeks, sqrt(pi / 2) * sd_fit$predict(weeks), col = COL_NEW, lwd = 3)
   ends <- c(14, 40)
   end_sd <- sqrt(pi / 2) * sd_fit$predict(ends)
   text(ends, end_sd, sprintf("%.2f", end_sd), col = COL_NEW, font = 2, pos = 3)
   legend("topleft", bty = "n", pch = c(21, NA, NA, NA), lty = c(NA, 1, 2, 3), lwd = c(NA, 3, 2, 2),
-         pt.bg = c("white", NA, NA, NA), col = c(COL_BULK, COL_NEW, COL_OLD2, "grey50"),
+         pt.bg = c("white", NA, NA, NA), col = c(COL_BULK, COL_NEW, COL_ALT, "grey50"),
          legend = c(heb(c("אומדן לכל שבוע", "קו ישר, הנבחר")),
                     heb("החזקות (3,3)"), heb("סטיית תקן קבועה")))
 }, pointsize = PLOT_PT_SLIDE)
@@ -431,8 +454,8 @@ save_plot("05_z_by_week", function() {
   week_axis()
   axis(2, at = seq(-0.5, 1.5, 0.25), las = 1)
   abline(h = c(0, 1), col = "grey40", lty = 2)
-  lines(z_by_week$week, z_by_week$sd_z, col = COL_OLD2, lwd = 2)
-  points(z_by_week$week, z_by_week$sd_z, pch = 15, col = COL_OLD2, cex = 1.1)
+  lines(z_by_week$week, z_by_week$sd_z, col = COL_ALT, lwd = 2)
+  points(z_by_week$week, z_by_week$sd_z, pch = 15, col = COL_ALT, cex = 1.1)
   lines(z_by_week$week, z_by_week$mean_z, col = COL_NEW, lwd = 2)
   points(z_by_week$week, z_by_week$mean_z, pch = 16, col = COL_NEW, cex = 1.1)
   mean_marks <- z_by_week[z_by_week$week %in% c(14, 19, 23), ]
@@ -440,7 +463,7 @@ save_plot("05_z_by_week", function() {
        pos = ifelse(mean_marks$mean_z > 0, 3, 1))
   sd_mark <- z_by_week[which.max(z_by_week$sd_z), ]
   text(sd_mark$week, sd_mark$sd_z, sprintf("%.2f", sd_mark$sd_z), font = 2, pos = 3)
-  legend("topright", bty = "n", pch = c(15, 16), lwd = 2, col = c(COL_OLD2, COL_NEW),
+  legend("topright", bty = "n", pch = c(15, 16), lwd = 2, col = c(COL_ALT, COL_NEW),
          legend = heb(c("סטיית התקן של Z – רצוי 1", "ממוצע Z – רצוי 0")))
 })
 
@@ -491,16 +514,19 @@ save_table(percentile_table, "06_percentiles_by_week")
 save_plot("06_percentile_curves", function() {
   w <- seq(14, 40, by = 0.1)
   curves <- sapply(PERCENTILES, function(p) model_percentile(new_model, w, p))
-  cols <- c("#8C510A", "#D8B365", "#5AB4AC", "#01665E", "#003C30")
+  # כל העקומות הן של המודל החדש (כתום). האחוזונים הנמוכים והגבוהים מובחנים
+  # בסוג הקו: מלא לקיצוני (P3, P97.5), מקווקו ל-P5 ו-P95, מנוקד ל-P10.
+  ltys <- c(1, 2, 3, 2, 1)
   plot(train$pregweek, train$bpd, pch = 16, cex = 0.22,
        col = alpha_col(COL_BULK, 0.12), xlim = c(14, 40), ylim = c(10, 110),
        xaxt = "n", yaxt = "n", xlab = heb("שבוע הריון"),
-       ylab = heb("BPD (מ\"מ)"), main = heb("אחוזוני BPD לפי שבוע הריון"),
+       ylab = heb("BPD (מ\"מ)"), main = heb("עקומות האחוזונים של המודל החדש"),
        panel.first = soft_grid(seq(10, 110, 10)))
   week_axis()
   axis(2, at = seq(10, 110, 10), las = 1)
-  for (j in seq_along(PERCENTILES)) lines(w, curves[, j], col = cols[j], lwd = 2.5)
-  legend("topleft", bty = "n", lwd = 2.5, col = cols, legend = percentile_labels)
+  for (j in seq_along(PERCENTILES)) lines(w, curves[, j], col = COL_NEW, lwd = 2.5, lty = ltys[j])
+  legend("topleft", bty = "n", lwd = 2.5, lty = rev(ltys), col = COL_NEW, seg.len = 3,
+         legend = rev(percentile_labels))
 }, pointsize = PLOT_PT_SLIDE)
 
 ## ======================== 7. משימה 4 - הצלחת המודל מול הקיימים ===============
@@ -508,8 +534,8 @@ save_plot("06_percentile_curves", function() {
 # על קובץ האימון. הרעיון כמו בשבוע 2: אם העקומה מתאימה, אחוז המדידות
 # שחורגות מכל אחוזון צריך להיות שווה לאחוזון הנקוב (3, 5, 10, 95, 97.5).
 # מה להגיש: טבלה והשוואה (שיעור החריגות בפועל מול הנקוב, לכל מודל ולכל אחוזון,
-# עם רווח סמך), גרף, ומסקנה איזה מודל מתאים יותר ובאיזה שבועות. אפשר להוסיף
-# בדיקה על קובץ הבדיקה (test) כבדיקה משלימה.
+# עם רווח סמך), גרף, ומסקנה איזה מודל מתאים יותר ובאיזה שבועות. כמו שנאמר
+# בהרצאה, הבדיקה נעשית על קובץ האימון בלבד, וקובץ הבדיקה לא משמש כאן.
 # כלים מוכנים: model_z(model, w, y), model_percentile(model, w, p).
 
 models_compare <- list(new_model, had_model, kur_model)
