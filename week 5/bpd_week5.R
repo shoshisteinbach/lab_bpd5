@@ -470,10 +470,87 @@ save_plot("04_mean_growth", function() {
 }, pointsize = PLOT_PT_SLIDE)
 
 ## ======================== 5. מודל סטיית התקן =================================
-# מטרה: מודל גמיש לסטיית התקן, על |השארית| של מודל התוחלת, כמו בשבוע 4.
-# מה להגיש: המועמדים, הקריטריון והבחירה, המודל הסופי כנוסחה, בדיקת ציוני Z
-# לפי שבוע, וגרף סטיית התקן עם Hadlock.
-# התוצאה: sd_fit, ובסוף הסעיף new_model <- make_model(...).
+# מטרה: מודל לסטיית התקן, על |השארית| של מודל התוחלת, כמו בשבוע 4.
+# ההחלטה (README, החלטה 5): קו ישר, כמו בשבוע 4. בלי חיפוש קשרים.
+# מה להגיש: המודל הסופי כנוסחה, בדיקת ציוני Z לפי שבוע, וגרף סטיית התקן עם
+# Hadlock ועם המודל של שבוע 4.
+# התוצאה: sd_fit, ובסוף הסעיף new_model.
+
+# א. סטיית התקן = sqrt(pi/2) כפול קו ישר של |השארית| על השבוע: בהתפלגות
+# נורמלית התוחלת של |שארית| היא סטיית התקן כפול sqrt(2/pi), כ-0.8.
+mean_resid_all <- train$bpd - mean_fit$predict(train$pregweek)
+sd_fit <- lm(abs(mean_resid_all) ~ pregweek, data = train)
+sd_fun <- function(w) sqrt(pi / 2) * as.vector(predict(sd_fit, data.frame(pregweek = w)))
+sd_coef <- data.frame(term = c("1", "w"), coef = sqrt(pi / 2) * as.vector(coef(sd_fit)))
+save_table(sd_coef, "05_sd_final_model")
+cat("\nFinal SD model: SD =", signif(sd_coef$coef[1], 5), "+", signif(sd_coef$coef[2], 5), "* w\n")
+stopifnot(all(sd_fun(seq(14, 40, 0.1)) > 0))   # חיובית בכל הטווח
+
+new_model <- make_model("Spline", mean_fit$predict, sd_fun)
+
+# ב. בדיקת ההנחה: ציוני Z = (מדידה - תוחלת) / סטיית תקן. אם המודל טוב, בכל
+# שבוע הממוצע שלהם קרוב ל-0, סטיית התקן קרובה ל-1, וכ-90% מהם בין
+# -1.645 ל-1.645. לצד המודל החדש: המודל של שבוע 4 ו-Hadlock.
+z_models <- list(spline = new_model, week4 = fp_model, hadlock = had_model)
+z_all <- lapply(z_models, function(m) model_z(m, train$pregweek, train$bpd))
+z_summary <- data.frame(model = names(z_all),
+                        mean_z = sapply(z_all, mean), sd_z = sapply(z_all, sd),
+                        pct_within_1.645 = sapply(z_all, function(z) 100 * mean(abs(z) <= qnorm(0.95))))
+save_table(z_summary, "05_z_summary")
+cat("\nZ scores, all training data:\n")
+print(z_summary, digits = 3, row.names = FALSE)
+
+z_by_week <- data.frame(week = sort(unique(train$week)), n = as.vector(table(train$week)))
+for (m in names(z_all)) {
+  z_by_week[[paste0("mean_z_", m)]] <- as.vector(tapply(z_all[[m]], train$week, mean))
+  z_by_week[[paste0("sd_z_", m)]]   <- as.vector(tapply(z_all[[m]], train$week, sd))
+  z_by_week[[paste0("pct_within_", m)]] <-
+    as.vector(tapply(abs(z_all[[m]]) <= qnorm(0.95), train$week, mean)) * 100
+}
+save_table(z_by_week, "05_z_by_week")
+cat("\nZ scores by week:\n")
+print(z_by_week[, c("week", "n", "mean_z_spline", "sd_z_spline", "pct_within_spline",
+                    "sd_z_week4")], digits = 3, row.names = FALSE)
+
+# ג. גרפים
+# סטיית התקן לפי שבוע: אומדן לכל שבוע בנפרד (sqrt(pi/2) כפול ממוצע |השארית|)
+# מול הקו הישר, המודל של שבוע 4 ו-Hadlock (סטיית תקן קבועה, 3 מ"מ).
+sd_by_week <- sqrt(pi / 2) * as.vector(tapply(abs(mean_resid_all), train$week, mean))
+save_plot("05_sd_fit", function() {
+  weeks <- seq(14, 40, 0.1)
+  plot(NA, xlim = c(14, 40), ylim = c(2, 4), xaxt = "n", yaxt = "n",
+       xlab = heb("שבוע הריון"), ylab = heb("סטיית התקן של BPD (מ\"מ)"),
+       main = heb("הקו הישר מחמיץ את הפיזור הגדול בשבועות 23–25"),
+       panel.first = soft_grid(seq(2, 4, 0.25)))
+  week_axis()
+  axis(2, at = seq(2, 4, 0.5), las = 1)
+  lines(weeks, had_model$sd(weeks), col = COL_OLD, lwd = 2)
+  lines(weeks, fp_model$sd(weeks), col = COL_ALT, lwd = 2, lty = 2)
+  lines(weeks, sd_fun(weeks), col = COL_NEW, lwd = 3)
+  points(week_age, sd_by_week, pch = 21, bg = "white", col = COL_BULK, cex = 1.1)
+  legend("topleft", bty = "n", pch = c(21, rep(NA, 3)), lty = c(NA, 1, 2, 1),
+         lwd = c(NA, 3, 2, 2), pt.bg = c("white", NA, NA, NA), col = c(COL_BULK, curve_cols),
+         legend = c(heb("אומדן לכל שבוע בנפרד"), heb("קו ישר: המודל החדש"),
+                    heb("המודל של שבוע 4"), "Hadlock"))
+}, pointsize = PLOT_PT_SLIDE)
+
+save_plot("05_z_by_week", function() {
+  op <- par(mfrow = c(1, 2), mar = c(4.2, 4.2, 3, 1))
+  on.exit(par(op))
+  panel <- function(prefix, target, ylim, title, ylab) {
+    plot(NA, xlim = c(14, 40), ylim = ylim, xaxt = "n", las = 1,
+         xlab = heb("שבוע הריון"), ylab = heb(ylab), main = heb(title))
+    week_axis()
+    abline(h = target, col = "grey40", lty = 2)
+    lines(z_by_week$week, z_by_week[[paste0(prefix, "hadlock")]], col = COL_OLD, lwd = 2, type = "o", pch = 16, cex = 0.6)
+    lines(z_by_week$week, z_by_week[[paste0(prefix, "week4")]], col = COL_ALT, lwd = 2, lty = 2, type = "o", pch = 16, cex = 0.6)
+    lines(z_by_week$week, z_by_week[[paste0(prefix, "spline")]], col = COL_NEW, lwd = 3, type = "o", pch = 16, cex = 0.8)
+  }
+  panel("mean_z_", 0, c(-0.8, 0.5), "ממוצע ציוני Z לפי שבוע", "ממוצע Z")
+  legend("bottomleft", bty = "n", lty = c(1, 2, 1), lwd = c(3, 2, 2), pch = 16,
+         col = curve_cols, legend = curve_legend, cex = 0.85)
+  panel("sd_z_", 1, c(0.7, 1.3), "סטיית התקן של ציוני Z לפי שבוע", "סטיית התקן של Z")
+})
 
 ## ======================== 6. האחוזונים =======================================
 # מטרה: האחוזונים 3, 5, 10, 95 ו-97.5 של המודל החדש לכל שבוע 14-40.
