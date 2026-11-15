@@ -470,32 +470,204 @@ save_plot("04_mean_growth", function() {
 }, pointsize = PLOT_PT_SLIDE)
 
 ## ======================== 5. מודל סטיית התקן =================================
-# מטרה: מודל לסטיית התקן, על |השארית| של מודל התוחלת, כמו בשבוע 4.
-# ההחלטה (README, החלטה 5): קו ישר, כמו בשבוע 4. בלי חיפוש קשרים.
-# מה להגיש: המודל הסופי כנוסחה, בדיקת ציוני Z לפי שבוע, וגרף סטיית התקן עם
-# Hadlock ועם המודל של שבוע 4.
+# מטרה: מודל גמיש לסטיית התקן, באותה שיטה כמו התוחלת: ספליין קובי רגיל על
+# |השארית| של מודל התוחלת (README, החלטות 5 ו-5ב).
+# מה להגיש: המועמדים שנשקלו, הקריטריון והבחירה, המודל הסופי כנוסחה, בדיקת
+# ציוני Z לפי שבוע, וגרף סטיית התקן עם Hadlock ועם המודל של שבוע 4.
 # התוצאה: sd_fit, ובסוף הסעיף new_model.
 
-# א. סטיית התקן = sqrt(pi/2) כפול קו ישר של |השארית| על השבוע: בהתפלגות
+# א. סטיית התקן = sqrt(pi/2) כפול ספליין של |השארית| על השבוע: בהתפלגות
 # נורמלית התוחלת של |שארית| היא סטיית התקן כפול sqrt(2/pi), כ-0.8.
 mean_resid_all <- train$bpd - mean_fit$predict(train$pregweek)
-sd_fit <- lm(abs(mean_resid_all) ~ pregweek, data = train)
-sd_fun <- function(w) sqrt(pi / 2) * as.vector(predict(sd_fit, data.frame(pregweek = w)))
-sd_coef <- data.frame(term = c("1", "w"), coef = sqrt(pi / 2) * as.vector(coef(sd_fit)))
-save_table(sd_coef, "05_sd_final_model")
-cat("\nFinal SD model: SD =", signif(sd_coef$coef[1], 5), "+", signif(sd_coef$coef[2], 5), "* w\n")
-stopifnot(all(sd_fun(seq(14, 40, 0.1)) > 0))   # חיובית בכל הטווח
+abs_resid_all  <- abs(mean_resid_all)
+
+# ב. הקריטריון (README, החלטה 5א): קנס האחוזונים של שבוע 4, על הריונות מוסתרים.
+# בכל סיבוב מתאימים מחדש על 4 קבוצות גם את התוחלת וגם את סטיית התקן, ובודקים
+# על החמישית כמה מדידות נמצאות מתחת לכל עקומה. הקנס בכל אחוזון הוא המרחק
+# מהאחוז הרצוי, מחולק ב-sqrt(p(1-p)). ממוצע על השבועות ועל האחוזונים.
+
+# החלק שתלוי רק בתוחלת מחושב פעם אחת לכל חלוקה: התחזיות על ההריונות
+# המוסתרים, ו-|השארית| של מדידות האימון בכל סיבוב. fit_mean(tr) מתאימה מודל
+# תוחלת על השורות tr ומחזירה פונקציית תחזית.
+cv_mean_setup <- function(fit_mean, folds = fold) {
+  mu <- numeric(nrow(train)); abs_res <- vector("list", K_FOLDS)
+  for (k in seq_len(K_FOLDS)) {
+    tr <- folds != k
+    f <- fit_mean(tr)
+    mu[!tr] <- f(train$pregweek[!tr])
+    abs_res[[k]] <- abs(train$bpd[tr] - f(train$pregweek[tr]))
+  }
+  list(mu = mu, abs_res = abs_res, folds = folds)
+}
+spline_mean_fitter <- function(tr) fit_spline(train$bpd[tr], train$pregweek[tr], mean_knots)$predict
+fp_mean_fitter <- function(tr) {
+  m <- lm(bpd ~ I(pregweek^2) + I(pregweek^3), data = train[tr, ])
+  function(w) as.vector(predict(m, data.frame(pregweek = w)))
+}
+setup_main <- cv_mean_setup(spline_mean_fitter)
+
+# קנס האחוזונים על השורות idx, כמו ב-cv_percentile_penalty של שבוע 4
+percentile_penalty <- function(mu, s, idx = rep(TRUE, nrow(train))) {
+  mean(sapply(PERCENTILES, function(p) {
+    below <- train$bpd[idx] < mu[idx] + qnorm(p) * s[idx]
+    mean(abs(tapply(below, train$week[idx], mean) - p)) / sqrt(p * (1 - p))
+  }))
+}
+# הציון: הקנס, טעות התקן שלו (סטיית התקן של הקנס בין 5 הקבוצות, חלקי שורש 5),
+# וסטיית התקן הקטנה ביותר שהמודל נתן להריון מוסתר (חייבת להיות חיובית)
+score_penalty <- function(mu, s, folds) {
+  per_fold <- sapply(seq_len(K_FOLDS), function(k) percentile_penalty(mu, s, folds == k))
+  c(penalty = percentile_penalty(mu, s), penalty_se = sd(per_fold) / sqrt(K_FOLDS), min_sd = min(s))
+}
+score_sd_set <- function(knots, natural = FALSE, setup = setup_main) {
+  X <- cbind(1, spline_basis(train$pregweek, sort(knots), natural))
+  s <- numeric(nrow(train))
+  for (k in seq_len(K_FOLDS)) {
+    tr <- setup$folds != k
+    s[!tr] <- sqrt(pi / 2) * X[!tr, , drop = FALSE] %*%
+      .lm.fit(X[tr, , drop = FALSE], setup$abs_res[[k]])$coefficients
+  }
+  score_penalty(setup$mu, s, setup$folds)
+}
+
+# ג. המועמדים (README, החלטה 5ב): אותם גבולות כמו בתוחלת (שבועות שלמים 16-38,
+# לפחות שבועיים בין קשרים), אבל מ-0 עד 3 קשרים, כדי שגם מודל פשוט יוכל לנצח.
+# ספליין רגיל עם 0 קשרים הוא פולינום מדרגה 3. הספליין הטבעי (1-3 קשרים) נבדק
+# כחלופה, כמו בתוחלת.
+SD_KNOT_COUNTS <- 0:3
+sd_knot_sets <- c(list(numeric(0)), unlist(lapply(setdiff(SD_KNOT_COUNTS, 0), function(K)
+  Filter(function(t) all(diff(t) >= MIN_GAP), combn(KNOT_GRID, K, simplify = FALSE))),
+  recursive = FALSE))
+cat("\nSD knot sets searched:", length(sd_knot_sets), "cubic +", length(sd_knot_sets) - 1, "natural\n")
+
+sd_table <- do.call(rbind, lapply(c(FALSE, TRUE), function(nat) {
+  sets <- if (nat) sd_knot_sets[-1] else sd_knot_sets
+  sc <- t(sapply(sets, score_sd_set, natural = nat))
+  data.frame(type = if (nat) "natural" else "cubic",
+             knots = sapply(sets, paste, collapse = ", "),
+             n_knots = lengths(sets), coefs = lengths(sets) + if (nat) 2 else 4, sc)
+}))
+sd_table$method <- ifelse(sd_table$type == "cubic" & sd_table$knots == paste(mean_knots, collapse = ", "),
+                          "same knots as mean", "search")
+
+# נקודות ייחוס, לא מועמדות:
+#   קו ישר: ספליין טבעי בלי קשרים, עם התוחלת החדשה (הגרסה הקודמת של השבוע)
+#   המודל של שבוע 4: תוחלת FP (2,3) וקו ישר לסטיית התקן, באותה בדיקה בדיוק
+#   Hadlock: לא הותאם לנתונים שלנו, ולכן אין צורך בהריונות מוסתרים. אותו קנס,
+#            על כל קובץ האימון.
+setup_fp <- cv_mean_setup(fp_mean_fitter)
+had_s <- had_model$sd(train$pregweek)
+sd_refs <- data.frame(type = c("straight line", "week 4: FP mean + line", "Hadlock"),
+                      knots = "", n_knots = 0, coefs = c(2, 2, 1),
+                      rbind(score_sd_set(numeric(0), natural = TRUE),
+                            score_sd_set(numeric(0), natural = TRUE, setup = setup_fp),
+                            score_penalty(had_model$mean(train$pregweek), had_s, fold)),
+                      method = "reference")
+
+# ד. הבחירה (README, החלטה 5ג). קודם מחשבים את הכלל של התוחלת (one-standard-error
+# rule), מבין הספליינים הקוביים: המודל עם הכי מעט קשרים שהקנס שלו לא גבוה
+# מהקנס הטוב ביותר ועוד טעות תקן אחת. בין מודלים עם אותו מספר קשרים: הקנס
+# הנמוך ביותר. הכלל בוחר 21, 23, 30.
+# ההחלטה הסופית של הצוות: אותם קשרים כמו בתוחלת (21, 23, 26), כדי שלכל המודל
+# יהיה מערך קשרים אחד להסביר. ההחלטה התקבלה אחרי שראינו את התוצאות: הקנס שלהם
+# חורג מהסף בחלוקה הראשית בכ-0.0002, ונמצא מתחת לסף בכל 5 החלוקות האחרות
+# (סעיף ה). שני המודלים מוצגים בטבלאות.
+pick_one_se <- function(tab) {
+  b <- tab[which.min(tab$penalty), ]
+  el <- tab[tab$penalty <= b$penalty + b$penalty_se, ]
+  el <- el[el$n_knots == min(el$n_knots), ]
+  list(best = b, threshold = b$penalty + b$penalty_se, chosen = el[which.min(el$penalty), ])
+}
+sd_pick <- pick_one_se(sd_table[sd_table$type == "cubic", ])
+rule_knots <- as.numeric(strsplit(sd_pick$chosen$knots, ", ")[[1]])
+sd_knots   <- mean_knots
+sd_knots_label <- paste(sd_knots, collapse = ", ")
+sd_table$chosen <- sd_table$type == "cubic" & sd_table$knots == sd_knots_label
+sd_table$rule_choice <- sd_table$type == "cubic" & sd_table$knots == sd_pick$chosen$knots
+sd_refs$chosen <- sd_refs$rule_choice <- FALSE
+
+sd_table <- sd_table[order(sd_table$penalty), ]
+sd_table$rank <- ave(sd_table$penalty, sd_table$type, FUN = seq_along)
+sd_refs$rank <- NA
+save_table(rbind(sd_refs, sd_table), "05_sd_candidates")
+
+cat("\nBest cubic SD:", sd_pick$best$knots, "| penalty", round(sd_pick$best$penalty, 4),
+    "| SE", round(sd_pick$best$penalty_se, 4), "| threshold", round(sd_pick$threshold, 4), "\n")
+cat("Rule choice:", sd_pick$chosen$knots, "| penalty", round(sd_pick$chosen$penalty, 4), "\n")
+cat("Final choice (same knots as the mean):", sd_knots_label, "| penalty",
+    round(sd_table$penalty[sd_table$chosen], 4), "| within threshold:",
+    sd_table$penalty[sd_table$chosen] <= sd_pick$threshold, "\n")
+cat("\nBest cubic SD candidates by number of knots:\n")
+cub_sd <- sd_table[sd_table$type == "cubic", ]
+print(cub_sd[!duplicated(cub_sd$n_knots), ], digits = 4, row.names = FALSE)
+cat("\nSame knots as the mean, and best natural:\n")
+print(rbind(sd_table[sd_table$method == "same knots as mean", ],
+            head(sd_table[sd_table$type == "natural", ], 1)), digits = 4, row.names = FALSE)
+cat("\nReferences:\n")
+print(sd_refs, digits = 4, row.names = FALSE)
+
+# ה. יציבות הבחירה: כמו בתוחלת, 5 חלוקות אקראיות אחרות להריונות, על 20
+# המועמדים הקוביים המובילים ועל הקשרים שנבחרו. בכל חלוקה גם התוחלת מותאמת
+# מחדש בכל סיבוב. בכל חלוקה בודקים אם בחירת הכלל בחלוקה הראשית (21, 23, 30)
+# ואם הבחירה הסופית (21, 23, 26) נמצאות מתחת לסף של אותה חלוקה.
+cub_rows <- sd_table[sd_table$type == "cubic", ]
+top_sd <- rbind(head(cub_rows, 20), cub_rows[cub_rows$chosen & !(cub_rows$knots %in% head(cub_rows, 20)$knots), ])
+sd_stability <- do.call(rbind, lapply(2027:2031, function(s) {
+  set.seed(s)
+  f <- sample(rep(seq_len(K_FOLDS), length.out = length(ug)))[match(train$preg_id, ug)]
+  st <- cv_mean_setup(spline_mean_fitter, f)
+  sc <- t(sapply(top_sd$knots, function(kn)
+    score_sd_set(if (kn == "") numeric(0) else as.numeric(strsplit(kn, ", ")[[1]]), setup = st)))
+  sc <- data.frame(knots = top_sd$knots, n_knots = top_sd$n_knots, sc)
+  pk <- pick_one_se(sc)
+  rule_pen  <- sc$penalty[sc$knots == sd_pick$chosen$knots]
+  final_pen <- sc$penalty[sc$knots == sd_knots_label]
+  data.frame(seed = s, best = pk$best$knots, chosen_by_rule = pk$chosen$knots,
+             best_penalty = pk$best$penalty, threshold = pk$threshold,
+             rule_choice_penalty = rule_pen, rule_choice_within_threshold = rule_pen <= pk$threshold,
+             final_choice_penalty = final_pen, final_choice_within_threshold = final_pen <= pk$threshold)
+}))
+save_table(sd_stability, "05_sd_stability")
+cat("\nSD stability across other splits:\n")
+print(sd_stability, digits = 4, row.names = FALSE)
+
+# ו. המודל הסופי: הקשרים שנבחרו, מותאמים על כל קובץ האימון. המקדמים בנוסחה
+# כבר מוכפלים ב-sqrt(pi/2), כלומר הנוסחה נותנת ישר את סטיית התקן במ"מ.
+sd_fit <- fit_spline(abs_resid_all, train$pregweek, sd_knots)
+sd_fun <- function(w) sqrt(pi / 2) * sd_fit$predict(w)
+sd_final <- sd_fit
+sd_final$terms$coef <- sqrt(pi / 2) * sd_fit$terms$coef
+save_table(sd_final$terms[, c("term", "coef")], "05_sd_final_model")
+cat("\nFinal SD model:\n", spline_formula(sd_final), "\n")
+w_fine <- seq(14, 40, 0.01)
+stopifnot(all(sd_fun(w_fine) > 0))   # חיובית בכל הטווח
+# כמה הנוסחה המעוגלת ל-5 ספרות משמעותיות (כמו במצגת) סוטה מהעקומה
+sd_rounded <- transform(sd_final$terms, coef = signif(coef, 5))
+cat("Max deviation of the 5-digit formula from the curve (mm):",
+    signif(max(abs(eval_terms(sd_rounded, w_fine) - sd_fun(w_fine))), 2), "\n")
+cat("SD at weeks 14, 14.5, 24, 30, 37, 40:",
+    round(sd_fun(c(14, 14.5, 24, 30, 37, 40)), 2), "\n")
 
 new_model <- make_model("Spline", mean_fit$predict, sd_fun)
+# בחירת הכלל (21, 23, 30), להשוואה בטבלאות של ציוני Z
+rule_sd_fit <- fit_spline(abs_resid_all, train$pregweek, rule_knots)
+rule_model <- make_model("Spline, rule choice for SD", mean_fit$predict,
+                         function(w) sqrt(pi / 2) * rule_sd_fit$predict(w))
+# הקו הישר (הגרסה הקודמת של השבוע), להשוואה בטבלאות של ציוני Z
+line_sd_fit <- lm(abs_resid_all ~ pregweek, data = train)
+line_model <- make_model("Spline mean + straight-line SD", mean_fit$predict,
+  function(w) sqrt(pi / 2) * as.vector(predict(line_sd_fit, data.frame(pregweek = w))))
 
-# ב. בדיקת ההנחה: ציוני Z = (מדידה - תוחלת) / סטיית תקן. אם המודל טוב, בכל
+# ז. בדיקת ההנחה: ציוני Z = (מדידה - תוחלת) / סטיית תקן. אם המודל טוב, בכל
 # שבוע הממוצע שלהם קרוב ל-0, סטיית התקן קרובה ל-1, וכ-90% מהם בין
-# -1.645 ל-1.645. לצד המודל החדש: המודל של שבוע 4 ו-Hadlock.
-z_models <- list(spline = new_model, week4 = fp_model, hadlock = had_model)
+# -1.645 ל-1.645. לצד המודל החדש: בחירת הכלל, הקו הישר, המודל של שבוע 4 ו-Hadlock.
+z_models <- list(spline = new_model, rule = rule_model, line = line_model,
+                 week4 = fp_model, hadlock = had_model)
 z_all <- lapply(z_models, function(m) model_z(m, train$pregweek, train$bpd))
 z_summary <- data.frame(model = names(z_all),
                         mean_z = sapply(z_all, mean), sd_z = sapply(z_all, sd),
-                        pct_within_1.645 = sapply(z_all, function(z) 100 * mean(abs(z) <= qnorm(0.95))))
+                        pct_within_1.645 = sapply(z_all, function(z) 100 * mean(abs(z) <= qnorm(0.95))),
+                        max_weekly_sd_z_gap = sapply(z_all, function(z) max(abs(tapply(z, train$week, sd) - 1))))
 save_table(z_summary, "05_z_summary")
 cat("\nZ scores, all training data:\n")
 print(z_summary, digits = 3, row.names = FALSE)
@@ -510,28 +682,35 @@ for (m in names(z_all)) {
 save_table(z_by_week, "05_z_by_week")
 cat("\nZ scores by week:\n")
 print(z_by_week[, c("week", "n", "mean_z_spline", "sd_z_spline", "pct_within_spline",
-                    "sd_z_week4")], digits = 3, row.names = FALSE)
+                    "sd_z_rule", "pct_within_rule", "sd_z_line", "pct_within_line")],
+      digits = 3, row.names = FALSE)
 
-# ג. גרפים
+# ח. גרפים. בכל גרף: המודל החדש (כתום), Hadlock (כחול), המודל של שבוע 4
+# (אפור-כחלחל מקווקו). הקו הישר של השבוע כמעט זהה לזה של שבוע 4, ולכן לא מצויר.
+mark_sd_knots <- function(y_lab) {
+  abline(v = sd_knots, col = alpha_col(COL_NEW, 0.5), lty = 3, lwd = 1.5)
+  text(sd_knots, y_lab, sd_knots, col = COL_NEW, font = 2, cex = 0.85)
+}
 # סטיית התקן לפי שבוע: אומדן לכל שבוע בנפרד (sqrt(pi/2) כפול ממוצע |השארית|)
-# מול הקו הישר, המודל של שבוע 4 ו-Hadlock (סטיית תקן קבועה, 3 מ"מ).
-sd_by_week <- sqrt(pi / 2) * as.vector(tapply(abs(mean_resid_all), train$week, mean))
+# מול הספליין, המודל של שבוע 4 ו-Hadlock (סטיית תקן קבועה, 3 מ"מ).
+sd_by_week <- sqrt(pi / 2) * as.vector(tapply(abs_resid_all, train$week, mean))
 save_plot("05_sd_fit", function() {
   weeks <- seq(14, 40, 0.1)
-  plot(NA, xlim = c(14, 40), ylim = c(2, 4), xaxt = "n", yaxt = "n",
+  plot(NA, xlim = c(14, 40), ylim = c(1.75, 4), xaxt = "n", yaxt = "n",
        xlab = heb("שבוע הריון"), ylab = heb("סטיית התקן של BPD (מ\"מ)"),
-       main = heb("הקו הישר מחמיץ את הפיזור הגדול בשבועות 23–25"),
-       panel.first = soft_grid(seq(2, 4, 0.25)))
+       main = heb("הספליין תופס את הפיזור הגדול בשבועות 23–25 שהקו הישר החמיץ"),
+       panel.first = soft_grid(seq(1.75, 4, 0.25)))
   week_axis()
   axis(2, at = seq(2, 4, 0.5), las = 1)
+  mark_sd_knots(3.95)
   lines(weeks, had_model$sd(weeks), col = COL_OLD, lwd = 2)
   lines(weeks, fp_model$sd(weeks), col = COL_ALT, lwd = 2, lty = 2)
   lines(weeks, sd_fun(weeks), col = COL_NEW, lwd = 3)
   points(week_age, sd_by_week, pch = 21, bg = "white", col = COL_BULK, cex = 1.1)
-  legend("topleft", bty = "n", pch = c(21, rep(NA, 3)), lty = c(NA, 1, 2, 1),
+  legend("bottomright", bty = "n", pch = c(21, rep(NA, 3)), lty = c(NA, 1, 2, 1),
          lwd = c(NA, 3, 2, 2), pt.bg = c("white", NA, NA, NA), col = c(COL_BULK, curve_cols),
-         legend = c(heb("אומדן לכל שבוע בנפרד"), heb("קו ישר: המודל החדש"),
-                    heb("המודל של שבוע 4"), "Hadlock"))
+         legend = c(heb("אומדן לכל שבוע בנפרד"), heb("ספליין: המודל החדש"),
+                    heb("קו ישר: המודל של שבוע 4"), "Hadlock"))
 }, pointsize = PLOT_PT_SLIDE)
 
 save_plot("05_z_by_week", function() {
@@ -555,6 +734,85 @@ save_plot("05_z_by_week", function() {
 ## ======================== 6. האחוזונים =======================================
 # מטרה: האחוזונים 3, 5, 10, 95 ו-97.5 של המודל החדש לכל שבוע 14-40.
 # מה להגיש: טבלה לכל שבוע שלם, וגרף העקומות מעל הנתונים, עם עקומות Hadlock.
+# ועוד גרף משלים: רוחב הטווח התקין (README, החלטה 7).
+
+# א. הטבלה: לכל שבוע שלם, האחוזונים של המודל החדש, ולצדם של Hadlock
+percentile_weeks  <- 14:40
+percentile_labels <- paste0("P", 100 * PERCENTILES)
+percentile_matrix <- function(model, w) {
+  m <- sapply(PERCENTILES, function(p) model_percentile(model, w, p))
+  colnames(m) <- percentile_labels
+  m
+}
+percentile_table <- data.frame(week = percentile_weeks, percentile_matrix(new_model, percentile_weeks),
+                               check.names = FALSE)
+had_table <- percentile_matrix(had_model, percentile_weeks)
+colnames(had_table) <- paste0("hadlock_", percentile_labels)
+save_table(cbind(percentile_table, had_table), "06_percentiles_by_week")
+cat("\nPercentiles of the new model by week (mm):\n")
+print(percentile_table, digits = 4, row.names = FALSE)
+
+# בדיקות: בכל שבוע האחוזונים מסודרים (3 < 5 < 10 < 95 < 97.5), וכל עקומה עולה
+# לאורך כל ההריון
+w_fine_p <- seq(14, 40, 0.01)
+curves_fine <- percentile_matrix(new_model, w_fine_p)
+stopifnot(all(apply(curves_fine, 1, function(r) all(diff(r) > 0))))
+stopifnot(all(apply(curves_fine, 2, function(cl) all(diff(cl) > 0))))
+
+# ב. רוחב הטווח התקין: המרחק בין אחוזון 3 לאחוזון 97.5 בכל שבוע. בהתפלגות
+# נורמלית הוא סטיית התקן כפול (1.96 + 1.88), כלומר כ-3.84, ולכן צורתו כצורת
+# סטיית התקן. במ"מ ובמונחים של הטווח התקין קל יותר להסביר אותו.
+range_width <- function(model, w) model_percentile(model, w, 0.975) - model_percentile(model, w, 0.03)
+width_table <- data.frame(week = percentile_weeks,
+                          new = range_width(new_model, percentile_weeks),
+                          week4 = range_width(fp_model, percentile_weeks),
+                          hadlock = range_width(had_model, percentile_weeks))
+save_table(width_table, "06_range_width")
+cat("\nWidth of the normal range, P3 to P97.5 (mm):\n")
+print(width_table, digits = 3, row.names = FALSE)
+
+# ג. גרפים
+# העקומות: המודל החדש בקו מלא כתום, Hadlock בקו מקווקו כחול. אחוזון 3 ו-97.5
+# בקו עבה, 5 ו-95 בקו בינוני, 10 בקו דק.
+save_plot("06_percentile_curves", function() {
+  w <- seq(14, 40, 0.1)
+  new_c <- percentile_matrix(new_model, w)
+  had_c <- percentile_matrix(had_model, w)
+  lwds <- c(2.5, 1.8, 1.2, 1.8, 2.5)
+  plot(train$pregweek, train$bpd, pch = 16, cex = 0.22, col = alpha_col(COL_BULK, 0.12),
+       xlim = c(14, 40), ylim = c(10, 110), xaxt = "n", yaxt = "n",
+       xlab = heb("שבוע הריון"), ylab = heb("BPD (מ\"מ)"),
+       main = heb("עקומות האחוזונים: המודל החדש מול Hadlock"),
+       panel.first = soft_grid(seq(10, 110, 10)))
+  week_axis()
+  axis(2, at = seq(10, 110, 10), las = 1)
+  for (j in seq_along(PERCENTILES)) {
+    lines(w, had_c[, j], col = COL_OLD, lwd = lwds[j], lty = 2)
+    lines(w, new_c[, j], col = COL_NEW, lwd = lwds[j])
+  }
+  # מקרא: צבע = מודל, עובי הקו = האחוזון
+  legend("topleft", bty = "n", lty = c(1, 2, 1, 1, 1), lwd = c(2.5, 2.5, lwds[1:3]),
+         col = c(COL_NEW, COL_OLD, rep("grey35", 3)), seg.len = 3,
+         legend = c(heb("ספליין: המודל החדש"), "Hadlock", heb("אחוזונים 3 ו־97.5"),
+                    heb("אחוזונים 5 ו־95"), heb("אחוזון 10")))
+}, pointsize = PLOT_PT_SLIDE)
+
+save_plot("06_range_width", function() {
+  w <- seq(14, 40, 0.1)
+  plot(NA, xlim = c(14, 40), ylim = c(7, 14), xaxt = "n", yaxt = "n",
+       xlab = heb("שבוע הריון"), ylab = heb("רוחב הטווח התקין (מ\"מ)"),
+       main = heb("הטווח התקין צר בתחילת ההריון ומתרחב בשבועות 22–25"),
+       panel.first = soft_grid(7:14))
+  week_axis()
+  axis(2, at = 7:14, las = 1)
+  mark_sd_knots(13.85)
+  lines(w, range_width(had_model, w), col = COL_OLD, lwd = 2)
+  lines(w, range_width(fp_model, w), col = COL_ALT, lwd = 2, lty = 2)
+  lines(w, range_width(new_model, w), col = COL_NEW, lwd = 3)
+  legend("bottomright", bty = "n", lty = c(1, 2, 1), lwd = c(3, 2, 2), col = curve_cols,
+         legend = curve_legend)
+  text(39.8, 10.4, heb("הרוחב = המרחק בין אחוזון 3 לאחוזון 97.5"), adj = 1, col = "grey30", cex = 0.8)
+}, pointsize = PLOT_PT_SLIDE)
 
 ## ======================== 7. טיב ההתאמה מול המודלים הקיימים ==================
 # מטרה: אחוז המדידות מתחת לכל עקומה, בפועל מול הנקוב, בכלל קובץ האימון ולפי
