@@ -1,0 +1,8 @@
+"check","value","passed"
+"cubic, no knots = cubic polynomial (lm)",3.98614474761416e-12,TRUE
+"natural, no knots = straight line (lm)",8.10018718766514e-12,TRUE
+"cubic: formula in weeks = fitted curve",3.69482222595252e-13,TRUE
+"natural: formula in weeks = fitted curve",2.8421709430404e-14,TRUE
+"natural: straight line outside 14-40 (2nd difference)",5.6843418860808e-14,TRUE
+"cubic: number of coefficients = 4 + knots",0,TRUE
+"natural: number of coefficients = 2 + knots",0,TRUE
