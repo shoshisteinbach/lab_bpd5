@@ -519,7 +519,8 @@ score_penalty <- function(mu, s, folds) {
   per_fold <- sapply(seq_len(K_FOLDS), function(k) percentile_penalty(mu, s, folds == k))
   c(penalty = percentile_penalty(mu, s), penalty_se = sd(per_fold) / sqrt(K_FOLDS), min_sd = min(s))
 }
-score_sd_set <- function(knots, natural = FALSE, setup = setup_main) {
+# סטיית התקן של כל מדידה, מחושבת ממודל שלא ראה את ההריון שלה
+cv_sd_predict <- function(knots, natural = FALSE, setup = setup_main) {
   X <- cbind(1, spline_basis(train$pregweek, sort(knots), natural))
   s <- numeric(nrow(train))
   for (k in seq_len(K_FOLDS)) {
@@ -527,8 +528,10 @@ score_sd_set <- function(knots, natural = FALSE, setup = setup_main) {
     s[!tr] <- sqrt(pi / 2) * X[!tr, , drop = FALSE] %*%
       .lm.fit(X[tr, , drop = FALSE], setup$abs_res[[k]])$coefficients
   }
-  score_penalty(setup$mu, s, setup$folds)
+  s
 }
+score_sd_set <- function(knots, natural = FALSE, setup = setup_main)
+  score_penalty(setup$mu, cv_sd_predict(knots, natural, setup), setup$folds)
 
 # ג. המועמדים (README, החלטה 5ב): אותם גבולות כמו בתוחלת (שבועות שלמים 16-38,
 # לפחות שבועיים בין קשרים), אבל מ-0 עד 3 קשרים, כדי שגם מודל פשוט יוכל לנצח.
@@ -818,3 +821,126 @@ save_plot("06_range_width", function() {
 # מטרה: אחוז המדידות מתחת לכל עקומה, בפועל מול הנקוב, בכלל קובץ האימון ולפי
 # שבוע: המודל החדש מול Hadlock, Kurmanavicius והמודל של שבוע 4.
 # מה להגיש: טבלה עם רווחי סמך (bootstrap לפי הריון, כמו בשבוע 4), גרף ומסקנה.
+# ההחלטות: README, החלטות 8-11.
+
+# א. לכל מודל, אחוזון ומדידה: האם המדידה מתחת לעקומה? אם המודל מכויל, בכל
+# שבוע p אחוזים מהמדידות נמצאים מתחת לאחוזון p.
+cov_models <- list(spline = new_model, week4 = fp_model, hadlock = had_model, kurmanavicius = kur_model)
+weeks_cov <- sort(unique(train$week))
+week_idx  <- match(train$week, weeks_cov)
+preg_idx  <- match(train$preg_id, ug)
+below <- lapply(cov_models, function(m)
+  sapply(PERCENTILES, function(p) train$bpd < model_percentile(m, train$pregweek, p)) * 1)
+
+# שיעור המדידות מתחת לכל עקומה, בכלל הנתונים (שורה ראשונה) ובכל שבוע, במשקלים
+# נתונים. מטריצה: (1 + שבועות) × אחוזונים.
+cov_rates <- function(flags, wt = rep(1, nrow(train))) {
+  num <- rbind(colSums(flags * wt), rowsum(flags * wt, week_idx))
+  num / c(sum(wt), as.vector(rowsum(wt, week_idx)))
+}
+
+# ב. רווחי סמך: bootstrap לפי הריון, כמו בשבוע 4. בכל חזרה מגרילים הריונות עם
+# החזרה, וכל המדידות של הריון שהוגרל נכנסות יחד (המשקל = כמה פעמים הוגרל).
+BOOT_REPS <- 1000
+set.seed(2026)
+n_preg <- length(ug)
+boot <- array(NA_real_, c(BOOT_REPS, length(cov_models), length(weeks_cov) + 1, length(PERCENTILES)))
+for (b in seq_len(BOOT_REPS)) {
+  wt <- tabulate(sample.int(n_preg, n_preg, replace = TRUE), nbins = n_preg)[preg_idx]
+  for (i in seq_along(cov_models)) boot[b, i, , ] <- cov_rates(below[[i]], wt)
+}
+
+# ג. הטבלה המלאה: מודל × שבוע × אחוזון
+coverage <- do.call(rbind, lapply(seq_along(cov_models), function(i) {
+  obs <- cov_rates(below[[i]])
+  lo  <- apply(boot[, i, , ], c(2, 3), quantile, 0.025, names = FALSE)
+  hi  <- apply(boot[, i, , ], c(2, 3), quantile, 0.975, names = FALSE)
+  data.frame(model = names(cov_models)[i],
+             week = rep(c("All", weeks_cov), length(PERCENTILES)),
+             n_scans = rep(c(nrow(train), as.vector(table(train$week))), length(PERCENTILES)),
+             percentile = rep(100 * PERCENTILES, each = length(weeks_cov) + 1),
+             observed_pct = 100 * as.vector(obs),
+             ci_low_pct = 100 * as.vector(lo), ci_high_pct = 100 * as.vector(hi))
+}))
+coverage$difference_pp <- coverage$observed_pct - coverage$percentile
+coverage$nominal_in_ci <- coverage$ci_low_pct <= coverage$percentile & coverage$percentile <= coverage$ci_high_pct
+save_table(coverage, "07_percentile_coverage")
+
+# ד. סיכום לכל מודל ואחוזון: השיעור בכלל הנתונים, בכמה מתוך 26 השבועות האחוז
+# הנקוב מחוץ לרווח הסמך, והסטייה הגדולה ביותר בשבוע אחד
+by_week <- coverage[coverage$week != "All", ]
+coverage_summary <- do.call(rbind, lapply(split(by_week, list(by_week$model, by_week$percentile)), function(d) {
+  all_row <- coverage[coverage$model == d$model[1] & coverage$week == "All" & coverage$percentile == d$percentile[1], ]
+  j <- which.max(abs(d$difference_pp))
+  data.frame(model = d$model[1], percentile = d$percentile[1],
+             all_observed_pct = all_row$observed_pct, all_ci_low = all_row$ci_low_pct,
+             all_ci_high = all_row$ci_high_pct,
+             weeks_outside_ci = sum(!d$nominal_in_ci),
+             max_weekly_diff_pp = d$difference_pp[j], max_diff_week = d$week[j])
+}))
+coverage_summary <- coverage_summary[order(match(coverage_summary$model, names(cov_models)),
+                                           coverage_summary$percentile), ]
+save_table(coverage_summary, "07_coverage_summary")
+cat("\nCoverage summary (all training data + weeks where the nominal % is outside the CI):\n")
+print(coverage_summary, digits = 3, row.names = FALSE)
+
+# קנס האחוזונים של כל מודל על כל קובץ האימון: מספר אחד לכל מודל, אותו מדד
+# כמו בבחירת סטיית התקן (סעיף 5)
+penalty_all <- sapply(cov_models, function(m)
+  percentile_penalty(m$mean(train$pregweek), m$sd(train$pregweek)))
+save_table(data.frame(model = names(penalty_all), penalty_all_data = penalty_all), "07_penalty_all")
+cat("\nPercentile penalty on all training data:\n")
+print(round(penalty_all, 4))
+
+# ה. בדיקת התאמת יתר: אותם מדדים למודל החדש, פעם על הנתונים שעליהם הותאם,
+# ופעם על הריונות מוסתרים (התוחלת וסטיית התקן מותאמות על 4 קבוצות ונבדקות
+# על החמישית). מודל גמיש חשוף יותר להתאמת יתר, ולכן הבדיקה חשובה השבוע.
+mu_in <- new_model$mean(train$pregweek); s_in <- new_model$sd(train$pregweek)
+mu_cv <- setup_main$mu;                  s_cv <- cv_sd_predict(sd_knots)
+below_rate <- function(mu, s, idx = rep(TRUE, nrow(train)))
+  sapply(PERCENTILES, function(p) 100 * mean(train$bpd[idx] < mu[idx] + qnorm(p) * s[idx]))
+cv_check <- data.frame(
+  measure = c(paste0("pct_below_P", 100 * PERCENTILES), "percentile_penalty",
+              paste0("week14_pct_below_P", 100 * PERCENTILES)),
+  fitted_data = c(below_rate(mu_in, s_in), percentile_penalty(mu_in, s_in),
+                  below_rate(mu_in, s_in, train$week == 14)),
+  hidden_pregnancies = c(below_rate(mu_cv, s_cv), percentile_penalty(mu_cv, s_cv),
+                         below_rate(mu_cv, s_cv, train$week == 14)))
+save_table(cv_check, "07_cv_check")
+cat("\nIn-sample vs hidden pregnancies (new model):\n")
+print(cv_check, digits = 4, row.names = FALSE)
+
+# ו. גרף: אחוז המדידות מתחת לכל עקומה, לפי שבוע. המודל החדש עם רווחי סמך,
+# המודל של שבוע 4 ו-Hadlock בלי, כדי שהגרף יהיה קריא. Kurmanavicius רק בטבלאות
+# (README, החלטה 11): הערכים שלו רחוקים כל כך שהציר היה נמתח.
+save_plot("07_percentile_coverage", function() {
+  op <- par(mfrow = c(2, 3), mar = c(4.2, 4.2, 3, 1))
+  on.exit(par(op))
+  plot_models <- c("hadlock", "week4", "spline")
+  cols <- c(spline = COL_NEW, week4 = COL_ALT, hadlock = COL_OLD)
+  ltys <- c(spline = 1, week4 = 2, hadlock = 1)
+  lwds <- c(spline = 2.5, week4 = 1.8, hadlock = 1.8)
+  for (p in 100 * PERCENTILES) {
+    d <- by_week[by_week$percentile == p & by_week$model %in% plot_models, ]
+    d$wk <- as.numeric(d$week)
+    span <- range(c(d$observed_pct, d$ci_low_pct[d$model == "spline"], d$ci_high_pct[d$model == "spline"], p))
+    plot(NA, xlim = c(14, 39), ylim = span + c(-0.5, 0.5), xaxt = "n", las = 1,
+         xlab = heb("שבוע הריון"), ylab = heb("אחוז המדידות מתחת לעקומה"),
+         main = heb(paste("אחוזון", p)))
+    week_axis()
+    abline(h = p, col = "grey40", lty = 2)
+    s <- d[d$model == "spline", ]
+    arrows(s$wk, s$ci_low_pct, s$wk, s$ci_high_pct, angle = 90, code = 3, length = 0.02,
+           col = alpha_col(COL_NEW, 0.6))
+    for (m in plot_models) {
+      z <- d[d$model == m, ]
+      lines(z$wk, z$observed_pct, col = cols[m], lty = ltys[m], lwd = lwds[m], type = "o", pch = 16, cex = 0.5)
+    }
+  }
+  plot.new()
+  legend("center", bty = "n", lty = c(1, 2, 1, 2), lwd = c(2.5, 1.8, 1.8, 1),
+         col = c(COL_NEW, COL_ALT, COL_OLD, "grey40"), pch = c(16, 16, 16, NA),
+         legend = c(heb("ספליין: המודל החדש"), heb("המודל של שבוע 4"), "Hadlock",
+                    heb("האחוז הנקוב")))
+  text(0.5, 0.12, heb("קווים אנכיים: רווח סמך 95% למודל החדש"), cex = 0.9, col = "grey30")
+}, width = 12, height = 7.5)
