@@ -1,0 +1,11 @@
+"method","evaluation","penalty","penalty_se"
+"day_normal","cv",0.033034401479993,0.00201219348361948
+"week_normal","cv",0.0354201455259436,0.0019104611971441
+"week5_spline_reference","cv",0.0359383814963972,0.00215915700245107
+"day_empirical","cv",0.0508112164223409,0.00177687095133596
+"week_empirical","cv",0.0549201642748441,0.000867247518113339
+"day_normal","in_sample",0.0341884496000025,NA
+"week5_spline_reference","in_sample",0.0352384509811957,NA
+"week_normal","in_sample",0.0407594133508301,NA
+"day_empirical","in_sample",0.0530888269443427,NA
+"week_empirical","in_sample",0.0562757999618242,NA

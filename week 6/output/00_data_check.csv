@@ -1,2 +1,11 @@
-"input_rows","usable_rows","excluded_rows","missing_bpd","missing_week","missing_day","weeks_min","weeks_max","day_min","day_max","unique_pregnancies"
-43741,43741,0,0,0,0,14,39,98,280,17718
+"check","value"
+"measurements","43741"
+"pregnancies","17718"
+"measurements_per_pregnancy","2.47"
+"missing_values","0"
+"weeks","14-39"
+"days","98-280"
+"bpd_whole_mm_pct","93.1"
+"min_measurements_per_day","80"
+"median_measurements_per_day","229"
+"measurements_day_280","418"
