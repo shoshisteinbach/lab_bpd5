@@ -280,6 +280,18 @@ weekly_exact <- do.call(rbind, lapply(seq_along(WEEKS), function(i)
 save_table(weekly_exact, "05_weekly_ties_exactness")
 weekly_exact_summary <- summarize_exactness(weekly_exact, "week")
 save_table(weekly_exact_summary, "05_weekly_ties_summary")
+
+# דוגמה למצגת: המקרה הגרוע ביותר (הפער הגדול ביותר מהיעד). לכל ערך BPD שלם סביב
+# הסף: כמה מדידות שוות לו, ואחוז המדידות שקטנות ממנו או שוות לו.
+worst <- weekly_exact[which.max(weekly_exact$best_gap_pp), ]
+z <- dat$bpd[dat$week == worst$week]
+ex_vals <- (worst$tie_value - 5):(worst$tie_value + 5)
+tie_example <- data.frame(week = worst$week, percentile = worst$percentile, bpd = ex_vals,
+                          n = vapply(ex_vals, function(v) sum(z == v), 0L),
+                          pct = vapply(ex_vals, function(v) 100 * mean(z == v), 0),
+                          below_pct = vapply(ex_vals, function(v) 100 * mean(z < v), 0),
+                          at_or_below_pct = vapply(ex_vals, function(v) 100 * mean(z <= v), 0))
+save_table(tie_example, "05_tie_example")
 cat("\nWeekly ties: how close can any threshold get?\n")
 print(weekly_exact_summary, digits = 3, row.names = FALSE)
 
